@@ -1,0 +1,264 @@
+-- Создание основного GUI
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
+ScreenGui.ResetOnSpawn = false
+
+-- Создание главного фрейма
+local MainFrame = Instance.new("Frame")
+MainFrame.Name = "MainMenu"
+MainFrame.Size = UDim2.new(0, 200, 0, 160)
+MainFrame.Position = UDim2.new(0.5, -100, 0.3, -80)
+MainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
+MainFrame.BorderSizePixel = 0
+MainFrame.Active = true
+MainFrame.Draggable = true
+MainFrame.Parent = ScreenGui
+
+-- Заголовок меню
+local Title = Instance.new("TextLabel")
+Title.Size = UDim2.new(1, 0, 0, 25)
+Title.Position = UDim2.new(0, 0, 0, 0)
+Title.BackgroundColor3 = Color3.fromRGB(50, 50, 50)
+Title.BorderSizePixel = 0
+Title.Text = "Меню (H - открыть/закрыть)"
+Title.TextColor3 = Color3.fromRGB(255, 255, 255)
+Title.Font = Enum.Font.SourceSansBold
+Title.TextSize = 14
+Title.Parent = MainFrame
+
+-- Кнопка 1: Партиклы
+local ParticlesButton = Instance.new("TextButton")
+ParticlesButton.Size = UDim2.new(1, -20, 0, 28)
+ParticlesButton.Position = UDim2.new(0, 10, 0, 32)
+ParticlesButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+ParticlesButton.BorderSizePixel = 0
+ParticlesButton.Text = "Выключить партиклы: ВЫКЛ"
+ParticlesButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+ParticlesButton.Font = Enum.Font.SourceSans
+ParticlesButton.TextSize = 13
+ParticlesButton.Parent = MainFrame
+
+-- Кнопка 2: Текстуры (ПРОСТАЯ ВЕРСИЯ)
+local TexturesButton = Instance.new("TextButton")
+TexturesButton.Size = UDim2.new(1, -20, 0, 28)
+TexturesButton.Position = UDim2.new(0, 10, 0, 65)
+TexturesButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+TexturesButton.BorderSizePixel = 0
+TexturesButton.Text = "Простые текстуры: ВЫКЛ"
+TexturesButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+TexturesButton.Font = Enum.Font.SourceSans
+TexturesButton.TextSize = 13
+TexturesButton.Parent = MainFrame
+
+-- Кнопка 3: Убрать свет
+local LightButton = Instance.new("TextButton")
+LightButton.Size = UDim2.new(1, -20, 0, 28)
+LightButton.Position = UDim2.new(0, 10, 0, 98)
+LightButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+LightButton.BorderSizePixel = 0
+LightButton.Text = "Убрать свет: ВЫКЛ"
+LightButton.TextColor3 = Color3.fromRGB(255, 255, 255)
+LightButton.Font = Enum.Font.SourceSans
+LightButton.TextSize = 13
+LightButton.Parent = MainFrame
+
+-- Переменные состояния
+local particlesDisabled = false
+local texturesSimplified = false
+local lightRemoved = false
+local menuVisible = true
+
+-- Сохранение оригинальных свойств
+local originalProperties = {}
+local originalLighting = {}
+local originalLights = {}
+
+-- Функция для удаления партиклов (ТОЛЬКО ПАРТИКЛЫ)
+local function RemoveParticles(object)
+    if object:IsA("ParticleEmitter") then
+        object.Enabled = false
+    end
+end
+
+-- ПРОСТАЯ ФУНКЦИЯ ДЛЯ ТЕКСТУР (ТОЛЬКО МЕНЯЕТ МАТЕРИАЛ)
+local function SimplifyTexture(object)
+    if object:IsA("BasePart") then
+        -- Сохраняем оригинальные свойства если ещё не сохранены
+        if not originalProperties[object] then
+            originalProperties[object] = {
+                Material = object.Material,
+                Color = object.Color
+            }
+        end
+        
+        -- Просто меняем материал на Plastic
+        pcall(function()
+            object.Material = Enum.Material.Plastic
+        end)
+    end
+end
+
+-- Функция для восстановления текстур
+local function RestoreTexture(object)
+    if object:IsA("BasePart") and originalProperties[object] then
+        pcall(function()
+            object.Material = originalProperties[object].Material
+        end)
+        originalProperties[object] = nil
+    end
+end
+
+-- Функция для сохранения оригинального источника света
+local function SaveOriginalLight(light)
+    if not originalLights[light] then
+        originalLights[light] = {
+            Brightness = light.Brightness,
+            Color = light.Color,
+            Enabled = light.Enabled,
+            Range = light.Range,
+            Shadows = light.Shadows
+        }
+    end
+end
+
+-- Функция для убирания света
+local function RemoveLight()
+    originalLighting = {
+        Ambient = game.Lighting.Ambient,
+        OutdoorAmbient = game.Lighting.OutdoorAmbient,
+        Brightness = game.Lighting.Brightness,
+        ClockTime = game.Lighting.ClockTime,
+        GlobalShadows = game.Lighting.GlobalShadows,
+        ExposureCompensation = game.Lighting.ExposureCompensation
+    }
+    
+    game.Lighting.Ambient = Color3.fromRGB(0, 0, 0)
+    game.Lighting.OutdoorAmbient = Color3.fromRGB(0, 0, 0)
+    game.Lighting.Brightness = 0
+    game.Lighting.GlobalShadows = false
+    game.Lighting.ExposureCompensation = 0
+    
+    for _, v in pairs(workspace:GetDescendants()) do
+        if v:IsA("Light") or v:IsA("PointLight") or v:IsA("SpotLight") or v:IsA("SurfaceLight") then
+            SaveOriginalLight(v)
+            v.Enabled = false
+        end
+    end
+end
+
+-- Функция для восстановления света
+local function RestoreLight()
+    game.Lighting.Ambient = originalLighting.Ambient
+    game.Lighting.OutdoorAmbient = originalLighting.OutdoorAmbient
+    game.Lighting.Brightness = originalLighting.Brightness
+    game.Lighting.ClockTime = originalLighting.ClockTime
+    game.Lighting.GlobalShadows = originalLighting.GlobalShadows
+    game.Lighting.ExposureCompensation = originalLighting.ExposureCompensation
+    
+    for light, props in pairs(originalLights) do
+        if light and light.Parent then
+            light.Brightness = props.Brightness
+            light.Color = props.Color
+            light.Enabled = props.Enabled
+            light.Range = props.Range
+            light.Shadows = props.Shadows
+        end
+    end
+    originalLights = {}
+end
+
+-- Обработка всех существующих объектов
+local function ProcessAllObjects()
+    for _, v in pairs(workspace:GetDescendants()) do
+        if particlesDisabled then
+            RemoveParticles(v)
+        end
+        if texturesSimplified then
+            SimplifyTexture(v)
+        end
+    end
+    if lightRemoved then
+        RemoveLight()
+    end
+end
+
+-- Слежение за новыми объектами
+workspace.DescendantAdded:Connect(function(descendant)
+    if particlesDisabled then
+        RemoveParticles(descendant)
+    end
+    if texturesSimplified then
+        task.wait(0.1)
+        SimplifyTexture(descendant)
+    end
+    if lightRemoved then
+        task.wait(0.1)
+        if descendant:IsA("Light") or descendant:IsA("PointLight") or descendant:IsA("SpotLight") or descendant:IsA("SurfaceLight") then
+            SaveOriginalLight(descendant)
+            descendant.Enabled = false
+        end
+    end
+end)
+
+-- Обработчики кнопок
+ParticlesButton.MouseButton1Click:Connect(function()
+    particlesDisabled = not particlesDisabled
+    if particlesDisabled then
+        ParticlesButton.Text = "Выключить партиклы: ВКЛ"
+        ParticlesButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+        ProcessAllObjects()
+        print("Партиклы выключены!")
+    else
+        ParticlesButton.Text = "Выключить партиклы: ВЫКЛ"
+        ParticlesButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        for _, v in pairs(workspace:GetDescendants()) do
+            if v:IsA("ParticleEmitter") then
+                v.Enabled = true
+            end
+        end
+        print("Партиклы включены!")
+    end
+end)
+
+TexturesButton.MouseButton1Click:Connect(function()
+    texturesSimplified = not texturesSimplified
+    if texturesSimplified then
+        TexturesButton.Text = "Простые текстуры: ВКЛ"
+        TexturesButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+        ProcessAllObjects()
+        print("Текстуры упрощены до Plastic!")
+    else
+        TexturesButton.Text = "Простые текстуры: ВЫКЛ"
+        TexturesButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        for _, v in pairs(workspace:GetDescendants()) do
+            RestoreTexture(v)
+        end
+        print("Текстуры восстановлены!")
+    end
+end)
+
+LightButton.MouseButton1Click:Connect(function()
+    lightRemoved = not lightRemoved
+    if lightRemoved then
+        LightButton.Text = "Убрать свет: ВКЛ"
+        LightButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+        RemoveLight()
+    else
+        LightButton.Text = "Убрать свет: ВЫКЛ"
+        LightButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        RestoreLight()
+    end
+end)
+
+-- Обработка клавиши H для открытия/закрытия меню
+game:GetService("UserInputService").InputBegan:Connect(function(input, gameProcessed)
+    if gameProcessed then return end
+    if input.KeyCode == Enum.KeyCode.H then
+        menuVisible = not menuVisible
+        MainFrame.Visible = menuVisible
+    end
+end)
+
+-- Показываем меню при запуске
+MainFrame.Visible = true
+print("Скрипт загружен! Нажмите H для открытия/закрытия меню")
