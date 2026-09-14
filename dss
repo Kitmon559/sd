@@ -3,18 +3,16 @@ local ScreenGui = Instance.new("ScreenGui")
 ScreenGui.Parent = game.Players.LocalPlayer:WaitForChild("PlayerGui")
 ScreenGui.ResetOnSpawn = false
 
--- Создание главного фрейма
 local MainFrame = Instance.new("Frame")
 MainFrame.Name = "MainMenu"
-MainFrame.Size = UDim2.new(0, 200, 0, 160)
-MainFrame.Position = UDim2.new(0.5, -100, 0.3, -80)
+MainFrame.Size = UDim2.new(0, 200, 0, 323)
+MainFrame.Position = UDim2.new(0.5, -100, 0.3, -160)
 MainFrame.BackgroundColor3 = Color3.fromRGB(35, 35, 35)
 MainFrame.BorderSizePixel = 0
 MainFrame.Active = true
 MainFrame.Draggable = true
 MainFrame.Parent = ScreenGui
 
--- Заголовок меню
 local Title = Instance.new("TextLabel")
 Title.Size = UDim2.new(1, 0, 0, 25)
 Title.Position = UDim2.new(0, 0, 0, 0)
@@ -26,102 +24,81 @@ Title.Font = Enum.Font.SourceSansBold
 Title.TextSize = 14
 Title.Parent = MainFrame
 
--- Кнопка 1: Партиклы
-local ParticlesButton = Instance.new("TextButton")
-ParticlesButton.Size = UDim2.new(1, -20, 0, 28)
-ParticlesButton.Position = UDim2.new(0, 10, 0, 32)
-ParticlesButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-ParticlesButton.BorderSizePixel = 0
-ParticlesButton.Text = "Выключить партиклы: ВЫКЛ"
-ParticlesButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-ParticlesButton.Font = Enum.Font.SourceSans
-ParticlesButton.TextSize = 13
-ParticlesButton.Parent = MainFrame
+local function createButton(text, yPos)
+    local btn = Instance.new("TextButton")
+    btn.Size = UDim2.new(1, -20, 0, 28)
+    btn.Position = UDim2.new(0, 10, 0, yPos)
+    btn.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+    btn.BorderSizePixel = 0
+    btn.Text = text
+    btn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    btn.Font = Enum.Font.SourceSans
+    btn.TextSize = 13
+    btn.Parent = MainFrame
+    return btn
+end
 
--- Кнопка 2: Текстуры (ПРОСТАЯ ВЕРСИЯ)
-local TexturesButton = Instance.new("TextButton")
-TexturesButton.Size = UDim2.new(1, -20, 0, 28)
-TexturesButton.Position = UDim2.new(0, 10, 0, 65)
-TexturesButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-TexturesButton.BorderSizePixel = 0
-TexturesButton.Text = "Простые текстуры: ВЫКЛ"
-TexturesButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-TexturesButton.Font = Enum.Font.SourceSans
-TexturesButton.TextSize = 13
-TexturesButton.Parent = MainFrame
+local ParticlesButton   = createButton("Выключить партиклы: ВЫКЛ", 32)
+local TexturesButton    = createButton("Простые текстуры: ВЫКЛ", 65)
+local LightButton       = createButton("Убрать свет: ВЫКЛ", 98)
+local PlayersButton     = createButton("Упростить игроков: ВЫКЛ", 131)
+local CollisionButton   = createButton("Скрыть без коллизии: ВЫКЛ", 164)
+local ShadowsButton     = createButton("Убрать тени: ВЫКЛ", 197)
+local DecalsButton      = createButton("Убрать декали: ВЫКЛ", 230)
+local DestroyTexButton  = createButton("Охота за текстурами: ВЫКЛ", 263)
 
--- Кнопка 3: Убрать свет
-local LightButton = Instance.new("TextButton")
-LightButton.Size = UDim2.new(1, -20, 0, 28)
-LightButton.Position = UDim2.new(0, 10, 0, 98)
-LightButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
-LightButton.BorderSizePixel = 0
-LightButton.Text = "Убрать свет: ВЫКЛ"
-LightButton.TextColor3 = Color3.fromRGB(255, 255, 255)
-LightButton.Font = Enum.Font.SourceSans
-LightButton.TextSize = 13
-LightButton.Parent = MainFrame
-
--- Переменные состояния
+-- Состояния
 local particlesDisabled = false
 local texturesSimplified = false
 local lightRemoved = false
+local playersSimplified = false
+local noCollisionHidden = false
+local shadowsRemoved = false
+local decalsRemoved = false
+local textureHuntActive = false   -- режим "удалять текстуры у всего, кроме игроков"
 local menuVisible = true
 
--- Сохранение оригинальных свойств
+-- Хранилища
 local originalProperties = {}
 local originalLighting = {}
 local originalLights = {}
+local originalPlayerState = {}
+local originalDecals = {}
+local hiddenNoCollision = {}
+local originalShadowProps = {}
 
--- Функция для удаления партиклов (ТОЛЬКО ПАРТИКЛЫ)
+-- ===== ПАРТИКЛЫ =====
 local function RemoveParticles(object)
-    if object:IsA("ParticleEmitter") then
-        object.Enabled = false
-    end
+    if object:IsA("ParticleEmitter") then object.Enabled = false end
 end
 
--- ПРОСТАЯ ФУНКЦИЯ ДЛЯ ТЕКСТУР (ТОЛЬКО МЕНЯЕТ МАТЕРИАЛ)
+-- ===== ПРОСТЫЕ ТЕКСТУРЫ (обратимо) =====
 local function SimplifyTexture(object)
     if object:IsA("BasePart") then
-        -- Сохраняем оригинальные свойства если ещё не сохранены
         if not originalProperties[object] then
-            originalProperties[object] = {
-                Material = object.Material,
-                Color = object.Color
-            }
+            originalProperties[object] = { Material = object.Material }
         end
-        
-        -- Просто меняем материал на Plastic
-        pcall(function()
-            object.Material = Enum.Material.Plastic
-        end)
+        pcall(function() object.Material = Enum.Material.Plastic end)
     end
 end
 
--- Функция для восстановления текстур
 local function RestoreTexture(object)
     if object:IsA("BasePart") and originalProperties[object] then
-        pcall(function()
-            object.Material = originalProperties[object].Material
-        end)
+        pcall(function() object.Material = originalProperties[object].Material end)
         originalProperties[object] = nil
     end
 end
 
--- Функция для сохранения оригинального источника света
+-- ===== СВЕТ =====
 local function SaveOriginalLight(light)
     if not originalLights[light] then
         originalLights[light] = {
-            Brightness = light.Brightness,
-            Color = light.Color,
-            Enabled = light.Enabled,
-            Range = light.Range,
-            Shadows = light.Shadows
+            Brightness = light.Brightness, Color = light.Color,
+            Enabled = light.Enabled, Range = light.Range, Shadows = light.Shadows
         }
     end
 end
 
--- Функция для убирания света
 local function RemoveLight()
     originalLighting = {
         Ambient = game.Lighting.Ambient,
@@ -131,30 +108,28 @@ local function RemoveLight()
         GlobalShadows = game.Lighting.GlobalShadows,
         ExposureCompensation = game.Lighting.ExposureCompensation
     }
-    
     game.Lighting.Ambient = Color3.fromRGB(0, 0, 0)
     game.Lighting.OutdoorAmbient = Color3.fromRGB(0, 0, 0)
     game.Lighting.Brightness = 0
     game.Lighting.GlobalShadows = false
     game.Lighting.ExposureCompensation = 0
-    
     for _, v in pairs(workspace:GetDescendants()) do
-        if v:IsA("Light") or v:IsA("PointLight") or v:IsA("SpotLight") or v:IsA("SurfaceLight") then
+        if v:IsA("Light") then
             SaveOriginalLight(v)
             v.Enabled = false
         end
     end
 end
 
--- Функция для восстановления света
 local function RestoreLight()
-    game.Lighting.Ambient = originalLighting.Ambient
-    game.Lighting.OutdoorAmbient = originalLighting.OutdoorAmbient
-    game.Lighting.Brightness = originalLighting.Brightness
-    game.Lighting.ClockTime = originalLighting.ClockTime
-    game.Lighting.GlobalShadows = originalLighting.GlobalShadows
-    game.Lighting.ExposureCompensation = originalLighting.ExposureCompensation
-    
+    if originalLighting.Ambient then
+        game.Lighting.Ambient = originalLighting.Ambient
+        game.Lighting.OutdoorAmbient = originalLighting.OutdoorAmbient
+        game.Lighting.Brightness = originalLighting.Brightness
+        game.Lighting.ClockTime = originalLighting.ClockTime
+        game.Lighting.GlobalShadows = originalLighting.GlobalShadows
+        game.Lighting.ExposureCompensation = originalLighting.ExposureCompensation
+    end
     for light, props in pairs(originalLights) do
         if light and light.Parent then
             light.Brightness = props.Brightness
@@ -167,73 +142,293 @@ local function RestoreLight()
     originalLights = {}
 end
 
--- Обработка всех существующих объектов
-local function ProcessAllObjects()
-    for _, v in pairs(workspace:GetDescendants()) do
-        if particlesDisabled then
-            RemoveParticles(v)
-        end
-        if texturesSimplified then
-            SimplifyTexture(v)
+-- ===== УПРОЩЕНИЕ ИГРОКОВ =====
+local function IsInsideCharacter(obj)
+    local char = game.Players.LocalPlayer.Character
+    -- проверяем, что объект принадлежит какому-либо персонажу
+    for _, plr in pairs(game.Players:GetPlayers()) do
+        if plr.Character and obj:IsDescendantOf(plr.Character) then
+            return true
         end
     end
-    if lightRemoved then
-        RemoveLight()
+    return false
+end
+
+local function SimplifyPlayer(player)
+    if not player or not player.Character then return end
+    if player == game.Players.LocalPlayer then return end
+    local char = player.Character
+    local state = originalPlayerState[player]
+    if not state then
+        state = { hiddenParts = {}, hiddenDecals = {}, clothing = {}, bodyMats = {} }
+        originalPlayerState[player] = state
+    end
+
+    for _, v in pairs(char:GetDescendants()) do
+        if v:IsA("BasePart") and v.Parent and v.Parent:IsA("Accessory") then
+            if state.hiddenParts[v] == nil then state.hiddenParts[v] = v.Transparency end
+            v.Transparency = 1
+            v.CanCollide = false
+        end
+        if v:IsA("Decal") or v:IsA("Texture") then
+            if state.hiddenDecals[v] == nil then state.hiddenDecals[v] = v.Transparency end
+            v.Transparency = 1
+        end
+        if v:IsA("Shirt") or v:IsA("Pants") or v:IsA("ShirtGraphic") then
+            local exists = false
+            for _, e in ipairs(state.clothing) do
+                if e.obj == v then exists = true break end
+            end
+            if not exists then
+                table.insert(state.clothing, { obj = v, texture = v.Texture })
+            end
+            pcall(function() v.Texture = "" end)
+        end
+        if v:IsA("BasePart") and (v.Name == "Head" or v.Name == "Torso"
+            or v.Name:find("Arm") or v.Name:find("Leg")
+            or v.Name == "HumanoidRootPart") then
+            if not state.bodyMats[v] then
+                state.bodyMats[v] = { Material = v.Material, Color = v.Color }
+            end
+            pcall(function()
+                v.Material = Enum.Material.SmoothPlastic
+                v.Color = Color3.fromRGB(120, 120, 120)
+            end)
+        end
     end
 end
 
--- Слежение за новыми объектами
+local function RestorePlayer(player)
+    local state = originalPlayerState[player]
+    if not state then return end
+    for part, t in pairs(state.hiddenParts) do
+        if part and part.Parent then pcall(function() part.Transparency = t end) end
+    end
+    for decal, t in pairs(state.hiddenDecals) do
+        if decal and decal.Parent then pcall(function() decal.Transparency = t end) end
+    end
+    for _, e in ipairs(state.clothing) do
+        if e.obj and e.obj.Parent then
+            pcall(function() e.obj.Texture = e.texture end)
+        end
+    end
+    for part, mats in pairs(state.bodyMats) do
+        if part and part.Parent then
+            pcall(function()
+                part.Material = mats.Material
+                part.Color = mats.Color
+            end)
+        end
+    end
+    originalPlayerState[player] = nil
+end
+
+local function SimplifyAllPlayers()
+    for _, plr in pairs(game.Players:GetPlayers()) do
+        if plr ~= game.Players.LocalPlayer then SimplifyPlayer(plr) end
+    end
+end
+
+local function RestoreAllPlayers()
+    for plr, _ in pairs(originalPlayerState) do
+        RestorePlayer(plr)
+    end
+end
+
+-- ===== СКРЫТИЕ БЕЗ КОЛЛИЗИИ =====
+local function HideNoCollision()
+    for _, v in pairs(workspace:GetDescendants()) do
+        if v:IsA("BasePart") and not v.CanCollide and v.Name ~= "HumanoidRootPart" then
+            if not IsInsideCharacter(v) then
+                if hiddenNoCollision[v] == nil then hiddenNoCollision[v] = v.Transparency end
+                v.Transparency = 1
+            end
+        end
+    end
+end
+
+local function RestoreNoCollision()
+    for obj, t in pairs(hiddenNoCollision) do
+        if obj and obj.Parent then pcall(function() obj.Transparency = t end) end
+    end
+    hiddenNoCollision = {}
+end
+
+-- ===== ТЕНИ =====
+local function RemoveShadows()
+    for _, v in pairs(workspace:GetDescendants()) do
+        if v:IsA("BasePart") then
+            if originalShadowProps[v] == nil then originalShadowProps[v] = v.CastShadow end
+            v.CastShadow = false
+        end
+    end
+end
+
+local function RestoreShadows()
+    for obj, cs in pairs(originalShadowProps) do
+        if obj and obj.Parent then pcall(function() obj.CastShadow = cs end) end
+    end
+    originalShadowProps = {}
+end
+
+-- ===== ДЕКАЛИ (обратимо) =====
+local function RemoveDecals()
+    for _, v in pairs(workspace:GetDescendants()) do
+        if (v:IsA("Decal") or v:IsA("Texture")) and not IsInsideCharacter(v) then
+            if originalDecals[v] == nil then originalDecals[v] = v.Transparency end
+            v.Transparency = 1
+        end
+    end
+end
+
+local function RestoreDecals()
+    for obj, t in pairs(originalDecals) do
+        if obj and obj.Parent then pcall(function() obj.Transparency = t end) end
+    end
+    originalDecals = {}
+end
+
+-- ===== ОХОТА ЗА ТЕКСТУРАМИ (необратимо для НЕ-игроков) =====
+-- Удаляет Decal/Texture/SurfaceAppearance и Material = Plastic у всего,
+-- кроме персонажей игроков. Работает постоянно, пока режим включён.
+local function HuntTexturesIn(object)
+    if not object or not object.Parent then return end
+    -- Не трогаем персонажей игроков
+    if IsInsideCharacter(object) then return end
+
+    if object:IsA("Decal") or object:IsA("Texture") or object:IsA("SurfaceAppearance") then
+        pcall(function() object:Destroy() end)
+        return
+    end
+
+    if object:IsA("BasePart") then
+        pcall(function()
+            object.Material = Enum.Material.Plastic
+            if object:IsA("MeshPart") then
+                object.TextureID = ""
+            end
+        end)
+    end
+end
+
+local function HuntAllTextures()
+    -- Проходим по всем потомкам workspace и Lighting
+    for _, v in pairs(workspace:GetDescendants()) do
+        HuntTexturesIn(v)
+    end
+end
+
+-- ===== ПРОЦЕСС =====
+local function ProcessAllObjects()
+    if textureHuntActive then HuntAllTextures() end
+    for _, v in pairs(workspace:GetDescendants()) do
+        if particlesDisabled then RemoveParticles(v) end
+        if texturesSimplified and not textureHuntActive then SimplifyTexture(v) end
+    end
+    if lightRemoved then RemoveLight() end
+    if playersSimplified then SimplifyAllPlayers() end
+    if noCollisionHidden then HideNoCollision() end
+    if shadowsRemoved then RemoveShadows() end
+    if decalsRemoved then RemoveDecals() end
+end
+
+-- ===== НОВЫЕ ОБЪЕКТЫ =====
 workspace.DescendantAdded:Connect(function(descendant)
-    if particlesDisabled then
-        RemoveParticles(descendant)
+    task.wait(0.1)
+    if not descendant or not descendant.Parent then return end
+
+    -- Охота на текстуры (работает всегда, пока активна)
+    if textureHuntActive then
+        HuntTexturesIn(descendant)
+        -- Если у BasePart есть дети-текстуры, удалим и их
+        for _, child in pairs(descendant:GetChildren()) do
+            if child:IsA("Decal") or child:IsA("Texture") or child:IsA("SurfaceAppearance") then
+                if not IsInsideCharacter(child) then
+                    pcall(function() child:Destroy() end)
+                end
+            end
+        end
     end
-    if texturesSimplified then
-        task.wait(0.1)
-        SimplifyTexture(descendant)
+
+    if particlesDisabled then RemoveParticles(descendant) end
+    if texturesSimplified and not textureHuntActive then SimplifyTexture(descendant) end
+    if lightRemoved and descendant:IsA("Light") then
+        SaveOriginalLight(descendant)
+        descendant.Enabled = false
     end
-    if lightRemoved then
-        task.wait(0.1)
-        if descendant:IsA("Light") or descendant:IsA("PointLight") or descendant:IsA("SpotLight") or descendant:IsA("SurfaceLight") then
-            SaveOriginalLight(descendant)
-            descendant.Enabled = false
+    if noCollisionHidden and descendant:IsA("BasePart") and not descendant.CanCollide then
+        if not IsInsideCharacter(descendant) then
+            hiddenNoCollision[descendant] = descendant.Transparency
+            descendant.Transparency = 1
+        end
+    end
+    if shadowsRemoved and descendant:IsA("BasePart") then
+        originalShadowProps[descendant] = descendant.CastShadow
+        descendant.CastShadow = false
+    end
+    if decalsRemoved and (descendant:IsA("Decal") or descendant:IsA("Texture")) then
+        if not IsInsideCharacter(descendant) then
+            originalDecals[descendant] = descendant.Transparency
+            descendant.Transparency = 1
         end
     end
 end)
 
--- Обработчики кнопок
+-- Дополнительно: подчищаем текстуры у новых объектов, добавленных внутрь частей
+workspace.DescendantAdded:Connect(function(descendant)
+    if textureHuntActive and (descendant:IsA("Decal") or descendant:IsA("Texture") or descendant:IsA("SurfaceAppearance")) then
+        task.wait(0.05)
+        if descendant and descendant.Parent and not IsInsideCharacter(descendant) then
+            pcall(function() descendant:Destroy() end)
+        end
+    end
+end)
+
+-- Игроки
+game.Players.PlayerAdded:Connect(function(player)
+    player.CharacterAdded:Connect(function()
+        task.wait(1)
+        if playersSimplified then SimplifyPlayer(player) end
+    end)
+end)
+
+game.Players.PlayerRemoving:Connect(function(player)
+    originalPlayerState[player] = nil
+end)
+
+-- ===== КНОПКИ =====
 ParticlesButton.MouseButton1Click:Connect(function()
     particlesDisabled = not particlesDisabled
     if particlesDisabled then
         ParticlesButton.Text = "Выключить партиклы: ВКЛ"
         ParticlesButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
         ProcessAllObjects()
-        print("Партиклы выключены!")
     else
         ParticlesButton.Text = "Выключить партиклы: ВЫКЛ"
         ParticlesButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
         for _, v in pairs(workspace:GetDescendants()) do
-            if v:IsA("ParticleEmitter") then
-                v.Enabled = true
-            end
+            if v:IsA("ParticleEmitter") then v.Enabled = true end
         end
-        print("Партиклы включены!")
     end
 end)
 
 TexturesButton.MouseButton1Click:Connect(function()
+    if textureHuntActive then
+        TexturesButton.Text = "Простые текстуры: Н/Д (охота)"
+        TexturesButton.BackgroundColor3 = Color3.fromRGB(90, 40, 40)
+        return
+    end
     texturesSimplified = not texturesSimplified
     if texturesSimplified then
         TexturesButton.Text = "Простые текстуры: ВКЛ"
         TexturesButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
         ProcessAllObjects()
-        print("Текстуры упрощены до Plastic!")
     else
         TexturesButton.Text = "Простые текстуры: ВЫКЛ"
         TexturesButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
         for _, v in pairs(workspace:GetDescendants()) do
             RestoreTexture(v)
         end
-        print("Текстуры восстановлены!")
     end
 end)
 
@@ -250,7 +445,80 @@ LightButton.MouseButton1Click:Connect(function()
     end
 end)
 
--- Обработка клавиши H для открытия/закрытия меню
+PlayersButton.MouseButton1Click:Connect(function()
+    playersSimplified = not playersSimplified
+    if playersSimplified then
+        PlayersButton.Text = "Упростить игроков: ВКЛ"
+        PlayersButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+        SimplifyAllPlayers()
+    else
+        PlayersButton.Text = "Упростить игроков: ВЫКЛ"
+        PlayersButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        RestoreAllPlayers()
+    end
+end)
+
+CollisionButton.MouseButton1Click:Connect(function()
+    noCollisionHidden = not noCollisionHidden
+    if noCollisionHidden then
+        CollisionButton.Text = "Скрыть без коллизии: ВКЛ"
+        CollisionButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+        HideNoCollision()
+    else
+        CollisionButton.Text = "Скрыть без коллизии: ВЫКЛ"
+        CollisionButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        RestoreNoCollision()
+    end
+end)
+
+ShadowsButton.MouseButton1Click:Connect(function()
+    shadowsRemoved = not shadowsRemoved
+    if shadowsRemoved then
+        ShadowsButton.Text = "Убрать тени: ВКЛ"
+        ShadowsButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+        RemoveShadows()
+    else
+        ShadowsButton.Text = "Убрать тени: ВЫКЛ"
+        ShadowsButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        RestoreShadows()
+    end
+end)
+
+DecalsButton.MouseButton1Click:Connect(function()
+    decalsRemoved = not decalsRemoved
+    if decalsRemoved then
+        DecalsButton.Text = "Убрать декали: ВКЛ"
+        DecalsButton.BackgroundColor3 = Color3.fromRGB(0, 120, 0)
+        RemoveDecals()
+    else
+        DecalsButton.Text = "Убрать декали: ВЫКЛ"
+        DecalsButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        RestoreDecals()
+    end
+end)
+
+-- ===== ОХОТА ЗА ТЕКСТУРАМИ (переключатель) =====
+DestroyTexButton.MouseButton1Click:Connect(function()
+    textureHuntActive = not textureHuntActive
+    if textureHuntActive then
+        DestroyTexButton.Text = "Охота за текстурами: ВКЛ"
+        DestroyTexButton.BackgroundColor3 = Color3.fromRGB(150, 30, 30)
+        -- Блокируем обратимые кнопки, чтобы не конфликтовали
+        TexturesButton.Text = "Простые текстуры: Н/Д (охота)"
+        TexturesButton.BackgroundColor3 = Color3.fromRGB(90, 40, 40)
+        HuntAllTextures()
+        print("[Охота] Все текстуры (кроме игроков) удаляются.")
+    else
+        DestroyTexButton.Text = "Охота за текстурами: ВЫКЛ"
+        DestroyTexButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        -- Возвращаем кнопку "Простые текстуры" в рабочее состояние
+        TexturesButton.Text = "Простые текстуры: ВЫКЛ"
+        TexturesButton.BackgroundColor3 = Color3.fromRGB(60, 60, 60)
+        print("[Охота] Остановлена. Уже удалённое не восстановится.")
+    end
+end)
+
+-- ===== КЛАВИША H =====
 game:GetService("UserInputService").InputBegan:Connect(function(input, gameProcessed)
     if gameProcessed then return end
     if input.KeyCode == Enum.KeyCode.H then
@@ -259,6 +527,5 @@ game:GetService("UserInputService").InputBegan:Connect(function(input, gameProce
     end
 end)
 
--- Показываем меню при запуске
 MainFrame.Visible = true
 print("Скрипт загружен! Нажмите H для открытия/закрытия меню")
