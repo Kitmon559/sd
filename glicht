@@ -1,0 +1,154 @@
+-- LocalScript (поместить в StarterPlayerScripts или StarterGui)
+
+local Players = game:GetService("Players")
+local TweenService = game:GetService("TweenService")
+
+local player = Players.LocalPlayer
+
+-- Функция получения Glitch Level
+local function getGlitchLevel(plr)
+    if plr:FindFirstChild("leaderstats") then
+        local glitch = plr.leaderstats:FindFirstChild("Glitch Level") 
+            or plr.leaderstats:FindFirstChild("GlitchLevel")
+            or plr.leaderstats:FindFirstChild("Glitch")
+        if glitch then return glitch.Value end
+    end
+    
+    local attr = plr:GetAttribute("GlitchLevel") or plr:GetAttribute("Glitch Level")
+    if attr then return attr end
+    
+    local stats = plr:FindFirstChild("Stats") or plr:FindFirstChild("Data")
+    if stats then
+        local glitch = stats:FindFirstChild("GlitchLevel") or stats:FindFirstChild("Glitch Level")
+        if glitch then return glitch.Value end
+    end
+    
+    return nil
+end
+
+-- GUI
+local screenGui = Instance.new("ScreenGui")
+screenGui.Name = "GlitchLevelNotifier"
+screenGui.ResetOnSpawn = false
+screenGui.IgnoreGuiInset = true
+screenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screenGui.Parent = player:WaitForChild("PlayerGui")
+
+-- Компактный фрейм
+local mainFrame = Instance.new("Frame")
+mainFrame.Name = "MainFrame"
+mainFrame.AnchorPoint = Vector2.new(0.5, 1)
+mainFrame.Position = UDim2.new(0.5, 0, 1, 20)
+mainFrame.Size = UDim2.new(0, 180, 0, 44)
+mainFrame.BackgroundColor3 = Color3.fromRGB(20, 20, 30)
+mainFrame.BackgroundTransparency = 0.1
+mainFrame.BorderSizePixel = 0
+mainFrame.Parent = screenGui
+
+local corner = Instance.new("UICorner")
+corner.CornerRadius = UDim.new(0, 10)
+corner.Parent = mainFrame
+
+local gradient = Instance.new("UIGradient")
+gradient.Color = ColorSequence.new({
+    ColorSequenceKeypoint.new(0, Color3.fromRGB(120, 60, 220)),
+    ColorSequenceKeypoint.new(1, Color3.fromRGB(40, 180, 255))
+})
+gradient.Rotation = 45
+gradient.Parent = mainFrame
+
+local stroke = Instance.new("UIStroke")
+stroke.Color = Color3.fromRGB(160, 100, 255)
+stroke.Thickness = 1.2
+stroke.Transparency = 0.3
+stroke.ApplyStrokeMode = Enum.ApplyStrokeMode.Border
+stroke.Parent = mainFrame
+
+-- Иконка
+local iconLabel = Instance.new("TextLabel")
+iconLabel.Name = "Icon"
+iconLabel.BackgroundTransparency = 1
+iconLabel.Size = UDim2.new(0, 36, 1, 0)
+iconLabel.Position = UDim2.new(0, 4, 0, 0)
+iconLabel.Font = Enum.Font.GothamBold
+iconLabel.Text = "⚡"
+iconLabel.TextSize = 22
+iconLabel.TextColor3 = Color3.fromRGB(200, 160, 255)
+iconLabel.Parent = mainFrame
+
+-- Заголовок
+local titleLabel = Instance.new("TextLabel")
+titleLabel.Name = "Title"
+titleLabel.BackgroundTransparency = 1
+titleLabel.Size = UDim2.new(1, -46, 0, 14)
+titleLabel.Position = UDim2.new(0, 42, 0, 5)
+titleLabel.Font = Enum.Font.GothamBold
+titleLabel.Text = "GLITCH LEVEL"
+titleLabel.TextSize = 10
+titleLabel.TextColor3 = Color3.fromRGB(200, 200, 220)
+titleLabel.TextXAlignment = Enum.TextXAlignment.Left
+titleLabel.Parent = mainFrame
+
+-- Значение
+local valueLabel = Instance.new("TextLabel")
+valueLabel.Name = "Value"
+valueLabel.BackgroundTransparency = 1
+valueLabel.Size = UDim2.new(1, -46, 0, 22)
+valueLabel.Position = UDim2.new(0, 42, 0, 18)
+valueLabel.Font = Enum.Font.GothamBlack
+valueLabel.Text = "0"
+valueLabel.TextSize = 18
+valueLabel.TextColor3 = Color3.fromRGB(255, 255, 255)
+valueLabel.TextXAlignment = Enum.TextXAlignment.Left
+valueLabel.Parent = mainFrame
+
+-- Данные игрока
+local glitchLevel = getGlitchLevel(player)
+if glitchLevel then
+    valueLabel.Text = tostring(glitchLevel)
+else
+    valueLabel.Text = "N/A"
+    valueLabel.TextColor3 = Color3.fromRGB(255, 120, 120)
+    titleLabel.Text = "GLITCH (нет)"
+end
+
+-- Появление снизу
+mainFrame.Position = UDim2.new(0.5, 0, 1, 60)
+local appearTween = TweenService:Create(
+    mainFrame,
+    TweenInfo.new(0.4, Enum.EasingStyle.Back, Enum.EasingDirection.Out),
+    { Position = UDim2.new(0.5, 0, 1, -20) }
+)
+appearTween:Play()
+
+-- Пульсация иконки
+task.spawn(function()
+    while mainFrame.Parent do
+        local pulse = TweenService:Create(
+            iconLabel,
+            TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+            { TextColor3 = Color3.fromRGB(255, 220, 130), TextSize = 26 }
+        )
+        pulse:Play()
+        pulse.Completed:Wait()
+        local back = TweenService:Create(
+            iconLabel,
+            TweenInfo.new(0.6, Enum.EasingStyle.Sine, Enum.EasingDirection.InOut),
+            { TextColor3 = Color3.fromRGB(200, 160, 255), TextSize = 22 }
+        )
+        back:Play()
+        back.Completed:Wait()
+    end
+end)
+
+-- Исчезновение через 3 секунды
+task.delay(3, function()
+    local disappearTween = TweenService:Create(
+        mainFrame,
+        TweenInfo.new(0.4, Enum.EasingStyle.Quad, Enum.EasingDirection.In),
+        { Position = UDim2.new(0.5, 0, 1, 70) }
+    )
+    disappearTween:Play()
+    disappearTween.Completed:Wait()
+    screenGui:Destroy()
+end)
