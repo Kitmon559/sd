@@ -1,0 +1,1947 @@
+--==============================================================
+-- RSPY Universal Hook Menu v11
+-- BIND: H | LMB edit | RMB options
+--==============================================================
+
+local Players = game:GetService("Players")
+local UIS     = game:GetService("UserInputService")
+local CoreGui = game:GetService("CoreGui")
+local Tween   = game:GetService("TweenService")
+local RS      = game:GetService("ReplicatedStorage")
+
+local C = {
+    enabled = false,
+    rules   = {},
+    hidden  = {},
+    blocked = {},
+    drafts  = {},
+
+    debugMode   = false,
+    scanGame    = true,
+
+    bgTop     = Color3.fromRGB(22, 24, 34),
+    bgBot     = Color3.fromRGB(14, 15, 22),
+    surface   = Color3.fromRGB(30, 32, 44),
+    surface2  = Color3.fromRGB(38, 41, 56),
+    surface3  = Color3.fromRGB(48, 52, 70),
+    input     = Color3.fromRGB(20, 21, 30),
+    border    = Color3.fromRGB(58, 64, 88),
+    borderLt  = Color3.fromRGB(74, 82, 110),
+    accent    = Color3.fromRGB(94, 138, 255),
+    accent2   = Color3.fromRGB(158, 108, 255),
+    good      = Color3.fromRGB(88, 224, 150),
+    bad       = Color3.fromRGB(255, 112, 122),
+    warn      = Color3.fromRGB(255, 190, 90),
+    text      = Color3.fromRGB(232, 236, 248),
+    textDim   = Color3.fromRGB(146, 156, 184),
+    textMute  = Color3.fromRGB(102, 110, 134),
+}
+
+if CoreGui:FindFirstChild("RSPY_UniversalMenu") then
+    CoreGui.RSPY_UniversalMenu:Destroy()
+end
+
+--==============================================================
+-- SERIALIZE / PARSE
+--==============================================================
+local function serialize(v, seen)
+    seen = seen or {}
+    local t = type(v)
+    if t == "string" then return string.format("%q", v)
+    elseif t == "number" or t == "boolean" then return tostring(v)
+    elseif t == "nil" then return "nil"
+    elseif t == "table" then
+        if seen[v] then return "--[[cycle]]" end
+        seen[v] = true
+        local keys, isArray = {}, true
+        for k in pairs(v) do
+            table.insert(keys, k)
+            if type(k) ~= "number" then isArray = false end
+        end
+        table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+        local parts = {}
+        if isArray then
+            for _, k in ipairs(keys) do table.insert(parts, serialize(v[k], seen)) end
+        else
+            for _, k in ipairs(keys) do
+                local key = (type(k) == "string" and k:match("^[%a_][%w_]*$")) and k
+                            or ("[" .. serialize(k, seen) .. "]")
+                table.insert(parts, key .. " = " .. serialize(v[k], seen))
+            end
+        end
+        seen[v] = nil
+        return "{ " .. table.concat(parts, ", ") .. " }"
+    end
+    return "nil"
+end
+
+local function parseValue(str)
+    if type(str) ~= "string" then return str end
+    str = str:gsub("^%s+", ""):gsub("%s+$", "")
+    if str == "" then return nil end
+    local fn = loadstring or load
+    if fn then
+        local ok, chunk = pcall(fn, "return " .. str)
+        if ok and chunk then
+            local ok2, r = pcall(chunk)
+            if ok2 then return r end
+        end
+    end
+    if str == "true"  then return true  end
+    if str == "false" then return false end
+    if str == "nil"   then return nil   end
+    local num = tonumber(str)
+    if num then return num end
+    if (str:sub(1,1) == '"' and str:sub(-1) == '"') or
+       (str:sub(1,1) == "'" and str:sub(-1) == "'") then
+        return str:sub(2, -2)
+    end
+    return str
+end
+
+local function shortPreview(args, maxLen)
+    maxLen = maxLen or 90
+    local s = serialize(args)
+    if #s > maxLen then s = s:sub(1, maxLen - 3) .. "..." end
+    return s
+end
+
+--==============================================================
+-- ИНДЕКС ВСЕХ REMOTE В ИГРЕ
+--==============================================================
+local function getAllRemotes()
+    local remotes = {}
+    local seen = {}
+
+    local function scan(container, path)
+        if not container then return end
+        local ok, children = pcall(function() return container:GetChildren() end)
+        if not ok then return end
+        for _, child in ipairs(children) do
+            if seen[child] then continue end
+            seen[child] = true
+            local cls = child.ClassName
+            if cls == "RemoteEvent" or cls == "RemoteFunction"
+               or cls == "UnreliableRemoteEvent" or cls == "BindableEvent"
+               or cls == "BindableFunction" then
+                table.insert(remotes, {
+                    name = child.Name,
+                    path = path .. "/" .. child.Name,
+                    class = cls,
+                    instance = child,
+                })
+            end
+            if cls == "Folder" or cls == "Model" or cls == "Actor" or cls == "Configuration" then
+                scan(child, path .. "/" .. child.Name)
+            end
+        end
+    end
+
+    scan(RS, "ReplicatedStorage")
+    scan(workspace, "Workspace")
+    scan(game:GetService("ReplicatedFirst"), "ReplicatedFirst")
+    scan(game:GetService("StarterGui"), "StarterGui")
+    scan(game:GetService("StarterPack"), "StarterPack")
+    scan(game:GetService("Players"), "Players")
+    local lp = Players.LocalPlayer
+    if lp then
+        scan(lp, "LocalPlayer")
+        scan(lp:FindFirstChild("PlayerGui"), "LocalPlayer.PlayerGui")
+        scan(lp:FindFirstChild("PlayerScripts"), "LocalPlayer.PlayerScripts")
+        scan(lp:FindFirstChild("Backpack"), "LocalPlayer.Backpack")
+    end
+
+    return remotes
+end
+
+--==============================================================
+-- HOOK (fixed vararg)
+--==============================================================
+local EventLog = {}
+local MAX_LOG = 200
+local lastByRemote = {}
+
+local origNamecall
+origNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+    local args = table.pack(...)
+    local method = getnamecallmethod()
+    local m = method:lower()
+
+    local toServer = (m == "fireserver" or m == "invokeserver"
+                      or m == "fire" or m == "invoke"
+                      or m == "sendmessage")
+
+    if C.debugMode and typeof(self) == "Instance" then
+        pcall(function()
+            local rName = self.Name
+            local now = os.clock()
+            if not lastByRemote["DBG_" .. rName] or now - lastByRemote["DBG_" .. rName] > 0.5 then
+                lastByRemote["DBG_" .. rName] = now
+                table.insert(EventLog, 1, {
+                    name = rName, method = m,
+                    args = args,
+                    time = now,
+                    debug = true,
+                })
+                if #EventLog > MAX_LOG then table.remove(EventLog) end
+            end
+        end)
+    end
+
+    if toServer then
+        local rName = (typeof(self) == "Instance") and self.Name or nil
+
+        if rName and C.blocked[rName] then
+            return
+        end
+
+        if rName and not C.hidden[rName] then
+            local now = os.clock()
+            if not lastByRemote[rName] or now - lastByRemote[rName] > 0.1 then
+                lastByRemote[rName] = now
+                table.insert(EventLog, 1, {
+                    name = rName, method = m,
+                    args = args,
+                    time = now,
+                    className = typeof(self) == "Instance" and self.ClassName or "?",
+                })
+                if #EventLog > MAX_LOG then table.remove(EventLog) end
+            end
+        end
+
+        if C.enabled and rName and C.rules[rName] and C.rules[rName].enabled then
+            local rule = C.rules[rName]
+            local newArgs = {}
+            local count = math.max(args.n, #rule.args)
+            for i = 1, count do
+                newArgs[i] = rule.args[i] ~= nil and rule.args[i] or args[i]
+            end
+            return origNamecall(self, unpack(newArgs, 1, count))
+        end
+    end
+
+    return origNamecall(self, unpack(args, 1, args.n))
+end))
+
+--==============================================================
+-- HELPERS
+--==============================================================
+local function corner(p, r)
+    local c = Instance.new("UICorner", p)
+    c.CornerRadius = UDim.new(0, r or 8)
+    return c
+end
+local function stroke(p, color, thickness, transparency)
+    local s = Instance.new("UIStroke", p)
+    s.Color = color or C.border
+    s.Thickness = thickness or 1
+    s.Transparency = transparency or 0
+    return s
+end
+local function pad(p, t, b, l, r)
+    local pd = Instance.new("UIPadding", p)
+    pd.PaddingTop = UDim.new(0, t or 0)
+    pd.PaddingBottom = UDim.new(0, b or 0)
+    pd.PaddingLeft = UDim.new(0, l or 0)
+    pd.PaddingRight = UDim.new(0, r or 0)
+    return pd
+end
+local function vlist(p, padding)
+    local l = Instance.new("UIListLayout", p)
+    l.Padding = UDim.new(0, padding or 6)
+    l.SortOrder = Enum.SortOrder.LayoutOrder
+    return l
+end
+
+--==============================================================
+-- SYNTAX HIGHLIGHTER
+--==============================================================
+local KEYWORDS = {
+    ["nil"]=1,["true"]=1,["false"]=1,["and"]=1,["or"]=1,["not"]=1,
+    ["if"]=1,["then"]=1,["else"]=1,["elseif"]=1,["end"]=1,
+    ["for"]=1,["while"]=1,["do"]=1,["repeat"]=1,["until"]=1,
+    ["function"]=1,["return"]=1,["break"]=1,["in"]=1,
+}
+local BUILTINS = {
+    ["game"]=1,["workspace"]=1,["script"]=1,["Enum"]=1,["Vector3"]=1,
+    ["CFrame"]=1,["Color3"]=1,["UDim2"]=1,["Instance"]=1,["task"]=1,
+    ["math"]=1,["string"]=1,["table"]=1,["os"]=1,["pairs"]=1,["ipairs"]=1,
+    ["print"]=1,["warn"]=1,["pcall"]=1,["tostring"]=1,["tonumber"]=1,
+}
+local CLR = {
+    kw="#C586C0", kwLocal="#569CD6", builtin="#4EC9B0",
+    num="#B5CEA8", str="#CE9178", com="#6A9955",
+    id="#9CDCFE", field="#4FC1FF", pct="#D4D4D4",
+}
+local function esc(s)
+    s = s:gsub("&", "&amp;")
+    s = s:gsub("<", "&lt;")
+    s = s:gsub(">", "&gt;")
+    return s
+end
+local function colorize(code)
+    local s = esc(code)
+    local out = {}
+    local i, n = 1, #s
+    local prevDot = false
+    while i <= n do
+        local c = s:sub(i, i)
+        if c == "-" and s:sub(i+1, i+1) == "-" then
+            local j = i
+            while j <= n and s:sub(j, j) ~= "\n" do j = j + 1 end
+            table.insert(out, string.format('<font color="%s">%s</font>', CLR.com, s:sub(i, j-1)))
+            i = j
+        elseif c == '"' or c == "'" then
+            local q, j = c, i + 1
+            while j <= n do
+                local cj = s:sub(j, j)
+                if cj == "\\" then j = j + 2
+                elseif cj == q then j = j + 1 break
+                else j = j + 1 end
+            end
+            table.insert(out, string.format('<font color="%s">%s</font>', CLR.str, s:sub(i, j-1)))
+            i = j; prevDot = false
+        elseif c:match("%d") then
+            local j = i
+            while j <= n and s:sub(j, j):match("[%d%.xXa-fA-F]") do j = j + 1 end
+            table.insert(out, string.format('<font color="%s">%s</font>', CLR.num, s:sub(i, j-1)))
+            i = j; prevDot = false
+        elseif c:match("[%a_]") then
+            local j = i
+            while j <= n and s:sub(j, j):match("[%w_]") do j = j + 1 end
+            local w = s:sub(i, j-1)
+            local col
+            if prevDot then col = CLR.field
+            elseif w == "local" or w == "self" then col = CLR.kwLocal
+            elseif KEYWORDS[w] then col = CLR.kw
+            elseif BUILTINS[w] then col = CLR.builtin
+            else col = CLR.id end
+            table.insert(out, string.format('<font color="%s">%s</font>', col, w))
+            i = j; prevDot = false
+        elseif c == "." then
+            table.insert(out, string.format('<font color="%s">%s</font>', CLR.pct, c))
+            i = i + 1; prevDot = true
+        else
+            table.insert(out, string.format('<font color="%s">%s</font>', CLR.pct, c))
+            i = i + 1; prevDot = false
+        end
+    end
+    return table.concat(out)
+end
+
+--==============================================================
+-- ROOT
+--==============================================================
+local ScreenGui = Instance.new("ScreenGui")
+ScreenGui.Name = "RSPY_UniversalMenu"
+ScreenGui.ResetOnSpawn = false
+ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+ScreenGui.Parent = CoreGui
+
+--==============================================================
+-- MAIN WINDOW
+--==============================================================
+local Shadow = Instance.new("Frame")
+Shadow.Size = UDim2.new(0, 640, 0, 560)
+Shadow.Position = UDim2.new(0.5, -320, 0.5, -280)
+Shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+Shadow.BackgroundTransparency = 0.65
+Shadow.BorderSizePixel = 0
+Shadow.ZIndex = 0
+Shadow.Parent = ScreenGui
+corner(Shadow, 18)
+
+local Main = Instance.new("Frame")
+Main.Size = UDim2.new(0, 640, 0, 560)
+Main.Position = UDim2.new(0.5, -320, 0.5, -280)
+Main.BackgroundColor3 = C.bgTop
+Main.BorderSizePixel = 0
+Main.Active = true
+Main.ClipsDescendants = true
+Main.ZIndex = 2
+Main.Parent = ScreenGui
+corner(Main, 14)
+
+local bgGrad = Instance.new("UIGradient", Main)
+bgGrad.Color = ColorSequence.new(C.bgTop, C.bgBot)
+bgGrad.Rotation = 90
+
+stroke(Main, C.border, 1, 0.5)
+
+local function syncShadow()
+    Shadow.Size = Main.Size
+    Shadow.Position = Main.Position
+end
+Main:GetPropertyChangedSignal("Size"):Connect(syncShadow)
+Main:GetPropertyChangedSignal("Position"):Connect(syncShadow)
+syncShadow()
+
+--==============================================================
+-- TITLE BAR
+--==============================================================
+local TitleBar = Instance.new("Frame")
+TitleBar.Size = UDim2.new(1, 0, 0, 54)
+TitleBar.BackgroundTransparency = 1
+TitleBar.ZIndex = 3
+TitleBar.Parent = Main
+
+do
+    local drag, sPos, sMouse
+    TitleBar.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+            drag = true
+            sMouse = input.Position
+            sPos = Main.Position
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then drag = false end
+            end)
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if drag and (input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - sMouse
+            Main.Position = UDim2.new(
+                sPos.X.Scale, sPos.X.Offset + d.X,
+                sPos.Y.Scale, sPos.Y.Offset + d.Y)
+        end
+    end)
+end
+
+local Logo = Instance.new("Frame", Main)
+Logo.Size = UDim2.new(0, 36, 0, 36)
+Logo.Position = UDim2.new(0, 16, 0, 9)
+Logo.BackgroundColor3 = C.accent
+Logo.BorderSizePixel = 0
+Logo.ZIndex = 4
+corner(Logo, 10)
+local lg = Instance.new("UIGradient", Logo)
+lg.Color = ColorSequence.new(C.accent, C.accent2)
+lg.Rotation = 45
+
+local LogoText = Instance.new("TextLabel", Logo)
+LogoText.Size = UDim2.new(1, 0, 1, 0)
+LogoText.BackgroundTransparency = 1
+LogoText.Text = "R"
+LogoText.TextColor3 = Color3.fromRGB(255, 255, 255)
+LogoText.Font = Enum.Font.GothamBlack
+LogoText.TextSize = 20
+LogoText.ZIndex = 5
+
+local Title = Instance.new("TextLabel", Main)
+Title.Size = UDim2.new(1, -240, 0, 20)
+Title.Position = UDim2.new(0, 62, 0, 11)
+Title.BackgroundTransparency = 1
+Title.Text = "Universal Hook"
+Title.TextColor3 = C.text
+Title.Font = Enum.Font.GothamBold
+Title.TextSize = 15
+Title.TextXAlignment = Enum.TextXAlignment.Left
+Title.ZIndex = 4
+
+local Subtitle = Instance.new("TextLabel", Main)
+Subtitle.Size = UDim2.new(1, -240, 0, 14)
+Subtitle.Position = UDim2.new(0, 62, 0, 30)
+Subtitle.BackgroundTransparency = 1
+Subtitle.Text = "H — toggle • LMB edit • RMB options"
+Subtitle.TextColor3 = C.textDim
+Subtitle.Font = Enum.Font.Gotham
+Subtitle.TextSize = 11
+Subtitle.TextXAlignment = Enum.TextXAlignment.Left
+Subtitle.ZIndex = 4
+
+local HookStatus = Instance.new("TextLabel", Main)
+HookStatus.Size = UDim2.new(0, 90, 0, 24)
+HookStatus.Position = UDim2.new(1, -166, 0, 15)
+HookStatus.BackgroundColor3 = Color3.fromRGB(60, 30, 35)
+HookStatus.Text = "HOOK OFF"
+HookStatus.TextColor3 = C.bad
+HookStatus.Font = Enum.Font.GothamBold
+HookStatus.TextSize = 10
+HookStatus.ZIndex = 4
+corner(HookStatus, 100)
+
+local CloseBtn = Instance.new("TextButton", Main)
+CloseBtn.Size = UDim2.new(0, 32, 0, 32)
+CloseBtn.Position = UDim2.new(1, -44, 0, 11)
+CloseBtn.BackgroundColor3 = Color3.fromRGB(52, 52, 66)
+CloseBtn.Text = "✕"
+CloseBtn.TextColor3 = Color3.fromRGB(220, 224, 240)
+CloseBtn.Font = Enum.Font.GothamBold
+CloseBtn.TextSize = 14
+CloseBtn.AutoButtonColor = false
+CloseBtn.ZIndex = 5
+corner(CloseBtn, 9)
+CloseBtn.MouseEnter:Connect(function()
+    Tween:Create(CloseBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(215, 70, 82)}):Play()
+end)
+CloseBtn.MouseLeave:Connect(function()
+    Tween:Create(CloseBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(52, 52, 66)}):Play()
+end)
+
+local divider = Instance.new("Frame", Main)
+divider.Size = UDim2.new(1, -32, 0, 1)
+divider.Position = UDim2.new(0, 16, 0, 54)
+divider.BackgroundColor3 = C.border
+divider.BackgroundTransparency = 0.5
+divider.BorderSizePixel = 0
+divider.ZIndex = 4
+
+--==============================================================
+-- HOOK TOGGLE
+--==============================================================
+local HookBtn = Instance.new("TextButton", Main)
+HookBtn.Size = UDim2.new(1, -32, 0, 48)
+HookBtn.Position = UDim2.new(0, 16, 0, 66)
+HookBtn.BackgroundColor3 = C.surface
+HookBtn.Text = ""
+HookBtn.AutoButtonColor = false
+HookBtn.ZIndex = 4
+corner(HookBtn, 11)
+
+local HookStroke = stroke(HookBtn, C.border, 1, 0.4)
+
+local HookIconWrap = Instance.new("Frame", HookBtn)
+HookIconWrap.Size = UDim2.new(0, 32, 0, 32)
+HookIconWrap.Position = UDim2.new(0, 8, 0, 8)
+HookIconWrap.BackgroundColor3 = Color3.fromRGB(42, 46, 64)
+HookIconWrap.BorderSizePixel = 0
+HookIconWrap.ZIndex = 5
+corner(HookIconWrap, 9)
+
+local HookIcon = Instance.new("TextLabel", HookIconWrap)
+HookIcon.Size = UDim2.new(1, 0, 1, 0)
+HookIcon.BackgroundTransparency = 1
+HookIcon.Text = "⚡"
+HookIcon.TextColor3 = C.accent
+HookIcon.Font = Enum.Font.GothamBold
+HookIcon.TextSize = 17
+HookIcon.ZIndex = 6
+
+local HookLabel = Instance.new("TextLabel", HookBtn)
+HookLabel.Size = UDim2.new(1, -180, 1, 0)
+HookLabel.Position = UDim2.new(0, 50, 0, 0)
+HookLabel.BackgroundTransparency = 1
+HookLabel.Text = "Hook: Disabled"
+HookLabel.TextColor3 = C.text
+HookLabel.Font = Enum.Font.GothamBold
+HookLabel.TextSize = 13
+HookLabel.TextXAlignment = Enum.TextXAlignment.Left
+HookLabel.ZIndex = 5
+
+local HookCount = Instance.new("TextLabel", HookBtn)
+HookCount.Size = UDim2.new(0, 100, 1, 0)
+HookCount.Position = UDim2.new(1, -112, 0, 0)
+HookCount.BackgroundTransparency = 1
+HookCount.Text = "0/0 rules"
+HookCount.TextColor3 = C.textDim
+HookCount.Font = Enum.Font.GothamMedium
+HookCount.TextSize = 11
+HookCount.TextXAlignment = Enum.TextXAlignment.Right
+HookCount.ZIndex = 5
+
+local function ruleCount()
+    local n = 0
+    for _ in pairs(C.rules) do n = n + 1 end
+    return n
+end
+local function activeRuleCount()
+    local n = 0
+    for _, r in pairs(C.rules) do if r.enabled then n = n + 1 end end
+    return n
+end
+
+local function refreshHookBtn()
+    local total = ruleCount()
+    local active = activeRuleCount()
+    if C.enabled then
+        HookLabel.Text = "Hook: Enabled"
+        HookBtn.BackgroundColor3 = Color3.fromRGB(36, 54, 94)
+        HookStroke.Color = C.accent
+        HookStroke.Transparency = 0.2
+        HookIconWrap.BackgroundColor3 = C.accent
+        HookIcon.TextColor3 = Color3.fromRGB(255, 255, 255)
+        HookStatus.Text = "HOOK ON"
+        HookStatus.TextColor3 = C.good
+        HookStatus.BackgroundColor3 = Color3.fromRGB(28, 58, 42)
+    else
+        HookLabel.Text = "Hook: Disabled"
+        HookBtn.BackgroundColor3 = C.surface
+        HookStroke.Color = C.border
+        HookStroke.Transparency = 0.4
+        HookIconWrap.BackgroundColor3 = Color3.fromRGB(42, 46, 64)
+        HookIcon.TextColor3 = C.accent
+        HookStatus.Text = "HOOK OFF"
+        HookStatus.TextColor3 = C.bad
+        HookStatus.BackgroundColor3 = Color3.fromRGB(60, 30, 35)
+    end
+    HookCount.Text = active .. "/" .. total .. " rules"
+end
+
+HookBtn.MouseButton1Click:Connect(function()
+    C.enabled = not C.enabled
+    refreshHookBtn()
+end)
+
+--==============================================================
+-- TAB BAR (4 вкладки)
+--==============================================================
+local TabBar = Instance.new("Frame", Main)
+TabBar.Size = UDim2.new(1, -32, 0, 34)
+TabBar.Position = UDim2.new(0, 16, 0, 124)
+TabBar.BackgroundColor3 = C.surface
+TabBar.BorderSizePixel = 0
+TabBar.ZIndex = 4
+corner(TabBar, 10)
+
+local TabBarLayout = Instance.new("UIListLayout", TabBar)
+TabBarLayout.FillDirection = Enum.FillDirection.Horizontal
+TabBarLayout.Padding = UDim.new(0, 4)
+TabBarLayout.SortOrder = Enum.SortOrder.LayoutOrder
+TabBarLayout.VerticalAlignment = Enum.VerticalAlignment.Center
+pad(TabBar, 0, 0, 4, 4)
+
+local function createTab(name, order, width)
+    local btn = Instance.new("TextButton", TabBar)
+    btn.Size = UDim2.new(0, width or 110, 0, 26)
+    btn.BackgroundColor3 = C.surface
+    btn.Text = name
+    btn.TextColor3 = C.textDim
+    btn.Font = Enum.Font.GothamBold
+    btn.TextSize = 11
+    btn.AutoButtonColor = false
+    btn.LayoutOrder = order
+    btn.ZIndex = 5
+    corner(btn, 8)
+    return btn
+end
+
+local EventsTabBtn   = createTab("Events",   1, 90)
+local HooksTabBtn    = createTab("Hooks",    2, 80)
+local SettingsTabBtn = createTab("Settings", 3, 90)
+local ScannerTabBtn  = createTab("Scanner",  4, 90)
+
+--==============================================================
+-- CONTENT AREA
+--==============================================================
+local ContentArea = Instance.new("Frame", Main)
+ContentArea.Size = UDim2.new(1, -32, 1, -216)
+ContentArea.Position = UDim2.new(0, 16, 0, 166)
+ContentArea.BackgroundColor3 = C.surface
+ContentArea.BorderSizePixel = 0
+ContentArea.ZIndex = 4
+corner(ContentArea, 12)
+stroke(ContentArea, C.border, 1, 0.6)
+
+--==============================================================
+-- EVENTS PAGE
+--==============================================================
+local EventsPage = Instance.new("Frame", ContentArea)
+EventsPage.Size = UDim2.new(1, 0, 1, 0)
+EventsPage.BackgroundTransparency = 1
+EventsPage.ZIndex = 5
+EventsPage.Visible = true
+
+local EventsTop = Instance.new("Frame", EventsPage)
+EventsTop.Size = UDim2.new(1, 0, 0, 38)
+EventsTop.BackgroundTransparency = 1
+EventsTop.ZIndex = 6
+
+local EventsTitle = Instance.new("TextLabel", EventsTop)
+EventsTitle.Size = UDim2.new(1, -200, 1, 0)
+EventsTitle.Position = UDim2.new(0, 14, 0, 0)
+EventsTitle.BackgroundTransparency = 1
+EventsTitle.Text = "CAPTURED EVENTS  •  LMB edit  •  RMB options"
+EventsTitle.TextColor3 = C.textDim
+EventsTitle.Font = Enum.Font.GothamBold
+EventsTitle.TextSize = 10
+EventsTitle.TextXAlignment = Enum.TextXAlignment.Left
+EventsTitle.ZIndex = 7
+
+local ClearBtn = Instance.new("TextButton", EventsTop)
+ClearBtn.Size = UDim2.new(0, 64, 0, 24)
+ClearBtn.Position = UDim2.new(1, -76, 0.5, -12)
+ClearBtn.BackgroundColor3 = Color3.fromRGB(58, 36, 44)
+ClearBtn.Text = "Clear"
+ClearBtn.TextColor3 = Color3.fromRGB(255, 155, 160)
+ClearBtn.Font = Enum.Font.GothamBold
+ClearBtn.TextSize = 10
+ClearBtn.AutoButtonColor = false
+ClearBtn.ZIndex = 7
+corner(ClearBtn, 7)
+
+local Scroll = Instance.new("ScrollingFrame", EventsPage)
+Scroll.Name = "EventScroll"
+Scroll.Size = UDim2.new(1, -16, 1, -46)
+Scroll.Position = UDim2.new(0, 8, 0, 40)
+Scroll.BackgroundTransparency = 1
+Scroll.BorderSizePixel = 0
+Scroll.ScrollBarThickness = 4
+Scroll.ScrollBarImageColor3 = C.accent
+Scroll.ScrollBarImageTransparency = 0.2
+Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+Scroll.ZIndex = 5
+Scroll.Active = true
+vlist(Scroll, 6)
+pad(Scroll, 4, 4, 4, 4)
+
+--==============================================================
+-- HOOKS PAGE
+--==============================================================
+local HooksPage = Instance.new("Frame", ContentArea)
+HooksPage.Size = UDim2.new(1, 0, 1, 0)
+HooksPage.BackgroundTransparency = 1
+HooksPage.ZIndex = 5
+HooksPage.Visible = false
+
+local HooksScroll = Instance.new("ScrollingFrame", HooksPage)
+HooksScroll.Size = UDim2.new(1, -16, 1, -46)
+HooksScroll.Position = UDim2.new(0, 8, 0, 40)
+HooksScroll.BackgroundTransparency = 1
+HooksScroll.BorderSizePixel = 0
+HooksScroll.ScrollBarThickness = 4
+HooksScroll.ScrollBarImageColor3 = C.accent
+HooksScroll.ScrollBarImageTransparency = 0.2
+HooksScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+HooksScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+HooksScroll.ZIndex = 5
+HooksScroll.Active = true
+vlist(HooksScroll, 6)
+pad(HooksScroll, 4, 4, 4, 4)
+
+local HooksEmpty = Instance.new("TextLabel", HooksPage)
+HooksEmpty.Size = UDim2.new(1, -40, 0, 60)
+HooksEmpty.Position = UDim2.new(0, 20, 0.5, -30)
+HooksEmpty.BackgroundTransparency = 1
+HooksEmpty.Text = "No hooks yet.\n\nGo to Events → click any event → Apply always"
+HooksEmpty.TextColor3 = C.textMute
+HooksEmpty.Font = Enum.Font.Gotham
+HooksEmpty.TextSize = 12
+HooksEmpty.TextWrapped = true
+HooksEmpty.Visible = false
+HooksEmpty.ZIndex = 6
+
+--==============================================================
+-- SETTINGS PAGE
+--==============================================================
+local SettingsPage = Instance.new("Frame", ContentArea)
+SettingsPage.Size = UDim2.new(1, 0, 1, 0)
+SettingsPage.BackgroundTransparency = 1
+SettingsPage.ZIndex = 5
+SettingsPage.Visible = false
+
+local SettingsScroll = Instance.new("ScrollingFrame", SettingsPage)
+SettingsScroll.Size = UDim2.new(1, -16, 1, -16)
+SettingsScroll.Position = UDim2.new(0, 8, 0, 8)
+SettingsScroll.BackgroundTransparency = 1
+SettingsScroll.BorderSizePixel = 0
+SettingsScroll.ScrollBarThickness = 4
+SettingsScroll.ScrollBarImageColor3 = C.accent
+SettingsScroll.ScrollBarImageTransparency = 0.2
+SettingsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+SettingsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+SettingsScroll.ZIndex = 5
+SettingsScroll.Active = true
+vlist(SettingsScroll, 8)
+pad(SettingsScroll, 4, 4, 4, 4)
+
+--==============================================================
+-- SCANNER PAGE
+--==============================================================
+local ScannerPage = Instance.new("Frame", ContentArea)
+ScannerPage.Size = UDim2.new(1, 0, 1, 0)
+ScannerPage.BackgroundTransparency = 1
+ScannerPage.ZIndex = 5
+ScannerPage.Visible = false
+
+local ScannerTop = Instance.new("Frame", ScannerPage)
+ScannerTop.Size = UDim2.new(1, 0, 0, 38)
+ScannerTop.BackgroundTransparency = 1
+ScannerTop.ZIndex = 6
+
+local ScannerTitle = Instance.new("TextLabel", ScannerTop)
+ScannerTitle.Size = UDim2.new(1, -260, 1, 0)
+ScannerTitle.Position = UDim2.new(0, 14, 0, 0)
+ScannerTitle.BackgroundTransparency = 1
+ScannerTitle.Text = "GAME REMOTES"
+ScannerTitle.TextColor3 = C.textDim
+ScannerTitle.Font = Enum.Font.GothamBold
+ScannerTitle.TextSize = 10
+ScannerTitle.TextXAlignment = Enum.TextXAlignment.Left
+ScannerTitle.ZIndex = 7
+
+local DebugToggle = Instance.new("TextButton", ScannerTop)
+DebugToggle.Size = UDim2.new(0, 76, 0, 24)
+DebugToggle.Position = UDim2.new(1, -152, 0.5, -12)
+DebugToggle.BackgroundColor3 = C.surface2
+DebugToggle.Text = "Debug: OFF"
+DebugToggle.TextColor3 = C.textDim
+DebugToggle.Font = Enum.Font.GothamBold
+DebugToggle.TextSize = 9
+DebugToggle.AutoButtonColor = false
+DebugToggle.ZIndex = 7
+corner(DebugToggle, 7)
+
+local RescanBtn = Instance.new("TextButton", ScannerTop)
+RescanBtn.Size = UDim2.new(0, 64, 0, 24)
+RescanBtn.Position = UDim2.new(1, -76, 0.5, -12)
+RescanBtn.BackgroundColor3 = C.accent
+RescanBtn.Text = "Rescan"
+RescanBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+RescanBtn.Font = Enum.Font.GothamBold
+RescanBtn.TextSize = 10
+RescanBtn.AutoButtonColor = false
+RescanBtn.ZIndex = 7
+corner(RescanBtn, 7)
+
+local ScannerScroll = Instance.new("ScrollingFrame", ScannerPage)
+ScannerScroll.Size = UDim2.new(1, -16, 1, -46)
+ScannerScroll.Position = UDim2.new(0, 8, 0, 40)
+ScannerScroll.BackgroundTransparency = 1
+ScannerScroll.BorderSizePixel = 0
+ScannerScroll.ScrollBarThickness = 4
+ScannerScroll.ScrollBarImageColor3 = C.accent
+ScannerScroll.ScrollBarImageTransparency = 0.2
+ScannerScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+ScannerScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+ScannerScroll.ZIndex = 5
+ScannerScroll.Active = true
+vlist(ScannerScroll, 6)
+pad(ScannerScroll, 4, 4, 4, 4)
+
+DebugToggle.MouseButton1Click:Connect(function()
+    C.debugMode = not C.debugMode
+    DebugToggle.Text = "Debug: " .. (C.debugMode and "ON" or "OFF")
+    DebugToggle.BackgroundColor3 = C.debugMode and C.warn or C.surface2
+    DebugToggle.TextColor3 = C.debugMode and Color3.fromRGB(20, 20, 20) or C.textDim
+end)
+
+--==============================================================
+-- TAB SWITCHING
+--==============================================================
+local function setTab(tab)
+    local all = {
+        {EventsTabBtn, EventsPage},
+        {HooksTabBtn, HooksPage},
+        {SettingsTabBtn, SettingsPage},
+        {ScannerTabBtn, ScannerPage},
+    }
+    for _, pair in ipairs(all) do
+        pair[1].BackgroundColor3 = C.surface
+        pair[1].TextColor3 = C.textDim
+        pair[2].Visible = false
+    end
+    if tab == "events" then
+        EventsTabBtn.BackgroundColor3 = C.accent
+        EventsTabBtn.TextColor3 = C.text
+        EventsPage.Visible = true
+    elseif tab == "hooks" then
+        HooksTabBtn.BackgroundColor3 = C.accent
+        HooksTabBtn.TextColor3 = C.text
+        HooksPage.Visible = true
+        refreshHooksList()
+    elseif tab == "settings" then
+        SettingsTabBtn.BackgroundColor3 = C.accent
+        SettingsTabBtn.TextColor3 = C.text
+        SettingsPage.Visible = true
+        refreshSettingsList()
+    elseif tab == "scanner" then
+        ScannerTabBtn.BackgroundColor3 = C.accent
+        ScannerTabBtn.TextColor3 = C.text
+        ScannerPage.Visible = true
+        refreshScannerList()
+    end
+end
+
+EventsTabBtn.MouseButton1Click:Connect(function() setTab("events") end)
+HooksTabBtn.MouseButton1Click:Connect(function() setTab("hooks") end)
+SettingsTabBtn.MouseButton1Click:Connect(function() setTab("settings") end)
+ScannerTabBtn.MouseButton1Click:Connect(function() setTab("scanner") end)
+
+--==============================================================
+-- RESIZE
+--==============================================================
+local ResizeHandle = Instance.new("TextButton", Main)
+ResizeHandle.Size = UDim2.new(0, 26, 0, 26)
+ResizeHandle.Position = UDim2.new(1, -34, 1, -34)
+ResizeHandle.BackgroundColor3 = C.accent
+ResizeHandle.BackgroundTransparency = 0.15
+ResizeHandle.Text = "◢"
+ResizeHandle.TextColor3 = Color3.fromRGB(255, 255, 255)
+ResizeHandle.Font = Enum.Font.GothamBold
+ResizeHandle.TextSize = 13
+ResizeHandle.AutoButtonColor = false
+ResizeHandle.Active = true
+ResizeHandle.ZIndex = 100
+ResizeHandle.Parent = Main
+corner(ResizeHandle, 8)
+
+do
+    local resizing, startInput, startSize
+    ResizeHandle.InputBegan:Connect(function(input)
+        if input.UserInputType == Enum.UserInputType.MouseButton1
+        or input.UserInputType == Enum.UserInputType.Touch then
+            resizing = true
+            startInput = input.Position
+            startSize = Main.Size
+            input.Changed:Connect(function()
+                if input.UserInputState == Enum.UserInputState.End then resizing = false end
+            end)
+        end
+    end)
+    UIS.InputChanged:Connect(function(input)
+        if resizing and (input.UserInputType == Enum.UserInputType.MouseMovement
+        or input.UserInputType == Enum.UserInputType.Touch) then
+            local d = input.Position - startInput
+            Main.Size = UDim2.new(0,
+                math.max(500, startSize.X.Offset + d.X), 0,
+                math.max(420, startSize.Y.Offset + d.Y))
+        end
+    end)
+end
+
+--==============================================================
+-- EDITOR
+--==============================================================
+local EditorWindow, EditorShadow = nil, nil
+local function destroyEditor()
+    if EditorWindow then EditorWindow:Destroy() end
+    if EditorShadow then EditorShadow:Destroy() end
+    EditorWindow, EditorShadow = nil, nil
+end
+
+local function openEditor(entry)
+    if EditorWindow then
+        EditorWindow:Destroy()
+        EditorShadow:Destroy()
+    end
+
+    local startPos = UDim2.new(0.5, -120, 0.5, -180)
+    local startSize = UDim2.new(0, 480, 0, 440)
+
+    EditorShadow = Instance.new("Frame", ScreenGui)
+    EditorShadow.Size = startSize
+    EditorShadow.Position = startPos
+    EditorShadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
+    EditorShadow.BackgroundTransparency = 0.6
+    EditorShadow.BorderSizePixel = 0
+    EditorShadow.ZIndex = 200
+    corner(EditorShadow, 18)
+
+    EditorWindow = Instance.new("Frame", ScreenGui)
+    EditorWindow.Name = "EditorWindow"
+    EditorWindow.Size = startSize
+    EditorWindow.Position = startPos
+    EditorWindow.BackgroundColor3 = C.bgTop
+    EditorWindow.BorderSizePixel = 0
+    EditorWindow.Active = true
+    EditorWindow.ClipsDescendants = true
+    EditorWindow.ZIndex = 202
+    corner(EditorWindow, 14)
+    stroke(EditorWindow, C.borderLt, 1, 0.3)
+
+    local edGrad = Instance.new("UIGradient", EditorWindow)
+    edGrad.Color = ColorSequence.new(C.bgTop, C.bgBot)
+    edGrad.Rotation = 90
+
+    local function syncEdShadow()
+        EditorShadow.Size = EditorWindow.Size
+        EditorShadow.Position = EditorWindow.Position
+    end
+    EditorWindow:GetPropertyChangedSignal("Size"):Connect(syncEdShadow)
+    EditorWindow:GetPropertyChangedSignal("Position"):Connect(syncEdShadow)
+
+    local EdTitleBar = Instance.new("Frame", EditorWindow)
+    EdTitleBar.Size = UDim2.new(1, 0, 0, 46)
+    EdTitleBar.BackgroundColor3 = C.surface2
+    EdTitleBar.BorderSizePixel = 0
+    EdTitleBar.ZIndex = 203
+    corner(EdTitleBar, 14)
+    local fix = Instance.new("Frame", EdTitleBar)
+    fix.Size = UDim2.new(1, 0, 0, 12)
+    fix.Position = UDim2.new(0, 0, 1, -12)
+    fix.BackgroundColor3 = C.surface2
+    fix.BorderSizePixel = 0
+    fix.ZIndex = 203
+
+    local EdTitle = Instance.new("TextLabel", EdTitleBar)
+    EdTitle.Size = UDim2.new(1, -50, 1, 0)
+    EdTitle.Position = UDim2.new(0, 14, 0, 0)
+    EdTitle.BackgroundTransparency = 1
+    EdTitle.Text = "✎  " .. entry.method .. " → " .. entry.name
+    EdTitle.TextColor3 = C.text
+    EdTitle.Font = Enum.Font.GothamBold
+    EdTitle.TextSize = 12
+    EdTitle.TextXAlignment = Enum.TextXAlignment.Left
+    EdTitle.TextTruncate = Enum.TextTruncate.AtEnd
+    EdTitle.ZIndex = 205
+
+    local EdClose = Instance.new("TextButton", EdTitleBar)
+    EdClose.Size = UDim2.new(0, 30, 0, 30)
+    EdClose.Position = UDim2.new(1, -38, 0.5, -15)
+    EdClose.BackgroundColor3 = Color3.fromRGB(58, 36, 44)
+    EdClose.Text = "✕"
+    EdClose.TextColor3 = Color3.fromRGB(255, 180, 180)
+    EdClose.Font = Enum.Font.GothamBold
+    EdClose.TextSize = 12
+    EdClose.AutoButtonColor = false
+    EdClose.ZIndex = 205
+    corner(EdClose, 8)
+    EdClose.MouseButton1Click:Connect(function() destroyEditor() end)
+
+    do
+        local drag, sPos, sMouse
+        EdTitleBar.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+                drag = true
+                sMouse = input.Position
+                sPos = EditorWindow.Position
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then drag = false end
+                end)
+            end
+        end)
+        UIS.InputChanged:Connect(function(input)
+            if drag and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+                local d = input.Position - sMouse
+                EditorWindow.Position = UDim2.new(
+                    sPos.X.Scale, sPos.X.Offset + d.X,
+                    sPos.Y.Scale, sPos.Y.Offset + d.Y)
+            end
+        end)
+    end
+
+    local EdResize = Instance.new("TextButton", EditorWindow)
+    EdResize.Size = UDim2.new(0, 24, 0, 24)
+    EdResize.Position = UDim2.new(1, -32, 1, -32)
+    EdResize.BackgroundColor3 = C.accent
+    EdResize.BackgroundTransparency = 0.15
+    EdResize.Text = "◢"
+    EdResize.TextColor3 = Color3.fromRGB(255, 255, 255)
+    EdResize.Font = Enum.Font.GothamBold
+    EdResize.TextSize = 12
+    EdResize.AutoButtonColor = false
+    EdResize.ZIndex = 210
+    corner(EdResize, 7)
+
+    do
+        local resizing, startInput, startSize
+        EdResize.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.Touch then
+                resizing = true
+                startInput = input.Position
+                startSize = EditorWindow.Size
+                input.Changed:Connect(function()
+                    if input.UserInputState == Enum.UserInputState.End then resizing = false end
+                end)
+            end
+        end)
+        UIS.InputChanged:Connect(function(input)
+            if resizing and (input.UserInputType == Enum.UserInputType.MouseMovement
+            or input.UserInputType == Enum.UserInputType.Touch) then
+                local d = input.Position - startInput
+                EditorWindow.Size = UDim2.new(0,
+                    math.max(360, startSize.X.Offset + d.X), 0,
+                    math.max(300, startSize.Y.Offset + d.Y))
+            end
+        end)
+    end
+
+    local ArgScroll = Instance.new("ScrollingFrame", EditorWindow)
+    ArgScroll.Size = UDim2.new(1, -20, 1, -152)
+    ArgScroll.Position = UDim2.new(0, 10, 0, 54)
+    ArgScroll.BackgroundTransparency = 1
+    ArgScroll.BorderSizePixel = 0
+    ArgScroll.ScrollBarThickness = 4
+    ArgScroll.ScrollBarImageColor3 = C.accent
+    ArgScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+    ArgScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+    ArgScroll.ZIndex = 203
+    vlist(ArgScroll, 8)
+    pad(ArgScroll, 4, 4, 4, 4)
+
+    local sourceArgs = entry.args
+    if C.rules[entry.name] and C.rules[entry.name].args then
+        sourceArgs = C.rules[entry.name].args
+    end
+    if C.drafts[entry.name] then
+        sourceArgs = C.drafts[entry.name]
+    end
+
+    local draft = {}
+
+    local function makeField(parent, layoutOrder, labelText, initialValue, onChanged)
+        local wrap = Instance.new("Frame", parent)
+        wrap.Size = UDim2.new(1, 0, 0, 58)
+        wrap.BackgroundColor3 = C.surface2
+        wrap.BorderSizePixel = 0
+        wrap.LayoutOrder = layoutOrder
+        wrap.ZIndex = 22
+        corner(wrap, 8)
+        pad(wrap, 6, 6, 10, 10)
+
+        local lbl = Instance.new("TextLabel", wrap)
+        lbl.Size = UDim2.new(1, 0, 0, 14)
+        lbl.BackgroundTransparency = 1
+        lbl.Text = labelText
+        lbl.TextColor3 = C.accent
+        lbl.Font = Enum.Font.GothamBold
+        lbl.TextSize = 10
+        lbl.TextXAlignment = Enum.TextXAlignment.Left
+        lbl.ZIndex = 23
+
+        local boxWrap = Instance.new("Frame", wrap)
+        boxWrap.Size = UDim2.new(1, 0, 0, 30)
+        boxWrap.Position = UDim2.new(0, 0, 0, 22)
+        boxWrap.BackgroundColor3 = C.input
+        boxWrap.BorderSizePixel = 0
+        boxWrap.ZIndex = 23
+        corner(boxWrap, 6)
+        local bs = stroke(boxWrap, C.border, 1, 0.3)
+
+        local box = Instance.new("TextBox", boxWrap)
+        box.Size = UDim2.new(1, -16, 1, 0)
+        box.Position = UDim2.new(0, 8, 0, 0)
+        box.BackgroundTransparency = 1
+        box.Text = serialize(initialValue)
+        box.TextColor3 = C.text
+        box.TextTransparency = 1
+        box.Font = Enum.Font.Code
+        box.TextSize = 12
+        box.TextXAlignment = Enum.TextXAlignment.Left
+        box.ClearTextOnFocus = false
+        box.ZIndex = 25
+
+        local hl = Instance.new("TextLabel", boxWrap)
+        hl.Size = UDim2.new(1, -16, 1, 0)
+        hl.Position = UDim2.new(0, 8, 0, 0)
+        hl.BackgroundTransparency = 1
+        hl.RichText = true
+        hl.Text = colorize(box.Text)
+        hl.Font = Enum.Font.Code
+        hl.TextSize = 12
+        hl.TextXAlignment = Enum.TextXAlignment.Left
+        hl.ZIndex = 24
+
+        box:GetPropertyChangedSignal("Text"):Connect(function()
+            hl.Text = colorize(box.Text)
+            if onChanged then onChanged(box.Text) end
+        end)
+        box.Focused:Connect(function()
+            bs.Color = C.accent; bs.Thickness = 1.5
+            box.TextTransparency = 0; hl.TextTransparency = 1
+        end)
+        box.FocusLost:Connect(function()
+            bs.Color = C.border; bs.Thickness = 1
+            box.TextTransparency = 1; hl.TextTransparency = 0
+            if onChanged then onChanged(box.Text) end
+        end)
+    end
+
+    local function buildArgCard(parent, index, value)
+        local card = Instance.new("Frame", parent)
+        card.Size = UDim2.new(1, -8, 0, 0)
+        card.AutomaticSize = Enum.AutomaticSize.Y
+        card.BackgroundColor3 = C.surface2
+        card.BorderSizePixel = 0
+        card.ZIndex = 204
+        card.LayoutOrder = index
+        corner(card, 8)
+        pad(card, 10, 10, 12, 12)
+        vlist(card, 6)
+
+        local header = Instance.new("TextLabel", card)
+        header.Size = UDim2.new(1, 0, 0, 14)
+        header.BackgroundTransparency = 1
+        header.Text = "ARGUMENT #" .. index
+        header.TextColor3 = C.accent
+        header.Font = Enum.Font.GothamBold
+        header.TextSize = 10
+        header.TextXAlignment = Enum.TextXAlignment.Left
+        header.ZIndex = 205
+        header.LayoutOrder = 1
+
+        if type(value) == "table" then
+            local keys = {}
+            for k in pairs(value) do table.insert(keys, k) end
+            table.sort(keys, function(a, b) return tostring(a) < tostring(b) end)
+            local sub = Instance.new("Frame", card)
+            sub.Size = UDim2.new(1, 0, 0, 0)
+            sub.AutomaticSize = Enum.AutomaticSize.Y
+            sub.BackgroundColor3 = C.surface
+            sub.BorderSizePixel = 0
+            sub.ZIndex = 205
+            sub.LayoutOrder = 2
+            corner(sub, 7)
+            pad(sub, 8, 8, 10, 10)
+            vlist(sub, 6)
+            local subTable = {}
+            for _, k in ipairs(keys) do subTable[k] = value[k] end
+            draft[index] = subTable
+            for order, k in ipairs(keys) do
+                local labelText = type(k) == "string" and k or ("[" .. tostring(k) .. "]")
+                makeField(sub, order, labelText, value[k], function(txt)
+                    draft[index][k] = parseValue(txt)
+                    C.drafts[entry.name] = draft
+                end)
+            end
+        else
+            draft[index] = value
+            makeField(card, 2, "value", value, function(txt)
+                draft[index] = parseValue(txt)
+                C.drafts[entry.name] = draft
+            end)
+        end
+    end
+
+    for i, arg in ipairs(sourceArgs) do
+        buildArgCard(ArgScroll, i, arg)
+    end
+
+    local SaveBtn = Instance.new("TextButton", EditorWindow)
+    SaveBtn.Size = UDim2.new(0.5, -15, 0, 40)
+    SaveBtn.Position = UDim2.new(0, 10, 1, -50)
+    SaveBtn.BackgroundColor3 = C.surface2
+    SaveBtn.Text = "💾  Save rule"
+    SaveBtn.TextColor3 = C.text
+    SaveBtn.Font = Enum.Font.GothamBold
+    SaveBtn.TextSize = 12
+    SaveBtn.AutoButtonColor = false
+    SaveBtn.ZIndex = 205
+    corner(SaveBtn, 8)
+    stroke(SaveBtn, C.border, 1, 0.3)
+
+    local ApplyBtn = Instance.new("TextButton", EditorWindow)
+    ApplyBtn.Size = UDim2.new(0.5, -15, 0, 40)
+    ApplyBtn.Position = UDim2.new(0.5, 5, 1, -50)
+    ApplyBtn.BackgroundColor3 = C.accent
+    ApplyBtn.Text = "⚡  Hook — apply always"
+    ApplyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+    ApplyBtn.Font = Enum.Font.GothamBold
+    ApplyBtn.TextSize = 12
+    ApplyBtn.AutoButtonColor = false
+    ApplyBtn.ZIndex = 205
+    corner(ApplyBtn, 8)
+
+    local function collectArgs()
+        local out = {}
+        for i = 1, #entry.args do out[i] = draft[i] end
+        return out
+    end
+
+    SaveBtn.MouseButton1Click:Connect(function()
+        C.rules[entry.name] = {
+            args = collectArgs(),
+            enabled = C.rules[entry.name] and C.rules[entry.name].enabled or true,
+        }
+        refreshHookBtn()
+        SaveBtn.Text = "✅  Saved!"
+        task.delay(1, function()
+            if SaveBtn.Parent then SaveBtn.Text = "💾  Save rule" end
+        end)
+    end)
+
+    ApplyBtn.MouseButton1Click:Connect(function()
+        C.rules[entry.name] = { args = collectArgs(), enabled = true }
+        C.enabled = true
+        refreshHookBtn()
+        ApplyBtn.Text = "✅  Applied!"
+        task.delay(1, function()
+            if ApplyBtn.Parent then ApplyBtn.Text = "⚡  Hook — apply always" end
+        end)
+    end)
+end
+
+--==============================================================
+-- CONTEXT MENU
+--==============================================================
+local ContextMenu = nil
+local function destroyContextMenu()
+    if ContextMenu then ContextMenu:Destroy() end
+    ContextMenu = nil
+end
+
+local function openContextMenu(entry, mousePos)
+    destroyContextMenu()
+    ContextMenu = Instance.new("Frame", Main)
+    ContextMenu.Name = "ContextMenu"
+    ContextMenu.Size = UDim2.new(0, 210, 0, 0)
+    ContextMenu.AutomaticSize = Enum.AutomaticSize.Y
+    ContextMenu.BackgroundColor3 = C.surface2
+    ContextMenu.BorderSizePixel = 0
+    ContextMenu.ZIndex = 300
+    corner(ContextMenu, 10)
+    stroke(ContextMenu, C.borderLt, 1, 0.2)
+
+    local ctxLayout = Instance.new("UIListLayout", ContextMenu)
+    ctxLayout.Padding = UDim.new(0, 2)
+    ctxLayout.SortOrder = Enum.SortOrder.LayoutOrder
+    pad(ContextMenu, 6, 6, 6, 6)
+
+    local header = Instance.new("TextLabel", ContextMenu)
+    header.Size = UDim2.new(1, 0, 0, 22)
+    header.BackgroundTransparency = 1
+    header.Text = entry.name
+    header.TextColor3 = C.textDim
+    header.Font = Enum.Font.GothamBold
+    header.TextSize = 10
+    header.TextXAlignment = Enum.TextXAlignment.Left
+    header.TextTruncate = Enum.TextTruncate.AtEnd
+    header.LayoutOrder = 1
+    header.ZIndex = 302
+
+    local sep = Instance.new("Frame", ContextMenu)
+    sep.Size = UDim2.new(1, 0, 0, 1)
+    sep.BackgroundColor3 = C.border
+    sep.BorderSizePixel = 0
+    sep.LayoutOrder = 2
+    sep.ZIndex = 302
+
+    local function mkItem(text, icon, color, order, onClick)
+        local item = Instance.new("TextButton", ContextMenu)
+        item.Size = UDim2.new(1, 0, 0, 30)
+        item.BackgroundColor3 = C.surface2
+        item.Text = ""
+        item.AutoButtonColor = false
+        item.LayoutOrder = order
+        item.ZIndex = 302
+        corner(item, 6)
+
+        local ic = Instance.new("TextLabel", item)
+        ic.Size = UDim2.new(0, 26, 1, 0)
+        ic.Position = UDim2.new(0, 4, 0, 0)
+        ic.BackgroundTransparency = 1
+        ic.Text = icon
+        ic.TextColor3 = color
+        ic.Font = Enum.Font.GothamBold
+        ic.TextSize = 13
+        ic.ZIndex = 303
+
+        local tx = Instance.new("TextLabel", item)
+        tx.Size = UDim2.new(1, -34, 1, 0)
+        tx.Position = UDim2.new(0, 32, 0, 0)
+        tx.BackgroundTransparency = 1
+        tx.Text = text
+        tx.TextColor3 = C.text
+        tx.Font = Enum.Font.GothamMedium
+        tx.TextSize = 12
+        tx.TextXAlignment = Enum.TextXAlignment.Left
+        tx.ZIndex = 303
+
+        item.MouseEnter:Connect(function()
+            Tween:Create(item, TweenInfo.new(0.12), {BackgroundColor3 = C.surface3}):Play()
+        end)
+        item.MouseLeave:Connect(function()
+            Tween:Create(item, TweenInfo.new(0.12), {BackgroundColor3 = C.surface2}):Play()
+        end)
+        item.MouseButton1Click:Connect(function()
+            onClick()
+            destroyContextMenu()
+        end)
+    end
+
+    local order = 3
+
+    if C.blocked[entry.name] then
+        mkItem("Unblock event", "🔓", C.good, order, function()
+            C.blocked[entry.name] = nil
+            refreshSettingsList()
+        end)
+    else
+        mkItem("Block event", "🔒", C.bad, order, function()
+            C.blocked[entry.name] = true
+            refreshSettingsList()
+        end)
+    end
+    order = order + 1
+
+    if C.hidden[entry.name] then
+        mkItem("Unignore event", "👁", C.good, order, function()
+            C.hidden[entry.name] = nil
+            refreshSettingsList()
+        end)
+    else
+        mkItem("Ignore event", "🚫", C.warn, order, function()
+            C.hidden[entry.name] = true
+            refreshSettingsList()
+            for _, c in ipairs(Scroll:GetChildren()) do
+                if c:IsA("Frame") and c:GetAttribute("EventName") == entry.name then
+                    c:Destroy()
+                end
+            end
+        end)
+    end
+    order = order + 1
+
+    mkItem("Edit arguments", "✎", C.accent, order, function()
+        openEditor(entry)
+    end)
+    order = order + 1
+
+    mkItem("Copy name", "📋", C.textDim, order, function()
+        if setclipboard then setclipboard(entry.name) end
+    end)
+
+    local mx = mousePos.X - Main.AbsolutePosition.X
+    local my = mousePos.Y - Main.AbsolutePosition.Y
+    local mw, mh = Main.AbsoluteSize.X, Main.AbsoluteSize.Y
+    local cw = ContextMenu.AbsoluteSize.X
+    if mx + cw > mw - 8 then mx = mw - cw - 8 end
+    if mx < 8 then mx = 8 end
+    if my < 8 then my = 8 end
+    ContextMenu.Position = UDim2.new(0, mx, 0, my)
+
+    task.defer(function()
+        local conn
+        conn = UIS.InputBegan:Connect(function(input)
+            if input.UserInputType == Enum.UserInputType.MouseButton1
+            or input.UserInputType == Enum.UserInputType.MouseButton2 then
+                task.wait(0.05)
+                destroyContextMenu()
+                if conn then conn:Disconnect() end
+            end
+        end)
+    end)
+end
+
+--==============================================================
+-- EVENT CARD
+--==============================================================
+local function createEventCard(entry)
+    local Card = Instance.new("Frame", Scroll)
+    Card.Size = UDim2.new(1, -8, 0, 72)
+    Card.BackgroundColor3 = C.surface2
+    Card.BorderSizePixel = 0
+    Card.ZIndex = 5
+    corner(Card, 9)
+    Card:SetAttribute("EventName", entry.name)
+
+    local CardStroke = stroke(Card, C.border, 1, 0.6)
+
+    local Click = Instance.new("TextButton", Card)
+    Click.Size = UDim2.new(1, -44, 1, 0)
+    Click.BackgroundTransparency = 1
+    Click.Text = ""
+    Click.AutoButtonColor = false
+    Click.ZIndex = 6
+    Click.MouseButton1Click:Connect(function() openEditor(entry) end)
+    Click.MouseButton2Click:Connect(function()
+        openContextMenu(entry, UIS:GetMouseLocation())
+    end)
+
+    Click.MouseEnter:Connect(function()
+        Tween:Create(CardStroke, TweenInfo.new(0.15), {Color = C.accent, Transparency = 0.2}):Play()
+        Tween:Create(Card, TweenInfo.new(0.15), {BackgroundColor3 = C.surface3}):Play()
+    end)
+    Click.MouseLeave:Connect(function()
+        Tween:Create(CardStroke, TweenInfo.new(0.15), {Color = C.border, Transparency = 0.6}):Play()
+        Tween:Create(Card, TweenInfo.new(0.15), {BackgroundColor3 = C.surface2}):Play()
+    end)
+
+    local DotColor = C.good
+    if C.blocked[entry.name] then DotColor = C.bad
+    elseif C.hidden[entry.name] then DotColor = C.warn end
+
+    local Dot = Instance.new("Frame", Card)
+    Dot.Size = UDim2.new(0, 8, 0, 8)
+    Dot.Position = UDim2.new(0, 14, 0, 17)
+    Dot.BackgroundColor3 = DotColor
+    Dot.BorderSizePixel = 0
+    Dot.ZIndex = 7
+    corner(Dot, 100)
+
+    local NameLbl = Instance.new("TextLabel", Card)
+    NameLbl.Size = UDim2.new(1, -190, 0, 18)
+    NameLbl.Position = UDim2.new(0, 30, 0, 10)
+    NameLbl.BackgroundTransparency = 1
+    NameLbl.Text = entry.name
+    NameLbl.TextColor3 = C.text
+    NameLbl.Font = Enum.Font.GothamBold
+    NameLbl.TextSize = 12
+    NameLbl.TextXAlignment = Enum.TextXAlignment.Left
+    NameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+    NameLbl.ZIndex = 7
+
+    local MethodBadge = Instance.new("Frame", Card)
+    MethodBadge.Size = UDim2.new(0, 84, 0, 18)
+    MethodBadge.Position = UDim2.new(1, -140, 0, 10)
+    MethodBadge.BackgroundColor3 = Color3.fromRGB(30, 34, 48)
+    MethodBadge.BorderSizePixel = 0
+    MethodBadge.ZIndex = 7
+    corner(MethodBadge, 5)
+
+    local MethodLbl = Instance.new("TextLabel", MethodBadge)
+    MethodLbl.Size = UDim2.new(1, 0, 1, 0)
+    MethodLbl.BackgroundTransparency = 1
+    MethodLbl.Text = entry.method
+    MethodLbl.TextColor3 = C.textDim
+    MethodLbl.Font = Enum.Font.Code
+    MethodLbl.TextSize = 10
+    MethodLbl.ZIndex = 8
+
+    local Preview = Instance.new("TextLabel", Card)
+    Preview.Size = UDim2.new(1, -50, 0, 24)
+    Preview.Position = UDim2.new(0, 30, 0, 34)
+    Preview.BackgroundTransparency = 1
+    Preview.Text = shortPreview(entry.args, 100)
+    Preview.TextColor3 = C.textMute
+    Preview.Font = Enum.Font.Code
+    Preview.TextSize = 10
+    Preview.TextXAlignment = Enum.TextXAlignment.Left
+    Preview.TextTruncate = Enum.TextTruncate.AtEnd
+    Preview.ZIndex = 7
+
+    local badges = {}
+    if C.rules[entry.name] then
+        table.insert(badges, {text = "HOOKED",
+            bg = C.rules[entry.name].enabled and C.accent or Color3.fromRGB(70, 72, 84)})
+    end
+    if C.blocked[entry.name] then table.insert(badges, {text = "BLOCKED", bg = C.bad}) end
+    if C.hidden[entry.name]  then table.insert(badges, {text = "IGNORED", bg = C.warn}) end
+
+    local bx = 1
+    for _, b in ipairs(badges) do
+        local RuleTag = Instance.new("Frame", Card)
+        RuleTag.Size = UDim2.new(0, 62, 0, 16)
+        RuleTag.Position = UDim2.new(1, -140 - (bx - 1) * 68, 0, 40)
+        RuleTag.BackgroundColor3 = b.bg
+        RuleTag.BorderSizePixel = 0
+        RuleTag.ZIndex = 7
+        corner(RuleTag, 4)
+
+        local tagLbl = Instance.new("TextLabel", RuleTag)
+        tagLbl.Size = UDim2.new(1, 0, 1, 0)
+        tagLbl.BackgroundTransparency = 1
+        tagLbl.Text = b.text
+        tagLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+        tagLbl.Font = Enum.Font.GothamBold
+        tagLbl.TextSize = 9
+        tagLbl.ZIndex = 8
+        bx = bx + 1
+    end
+
+    local HideBtn = Instance.new("TextButton", Card)
+    HideBtn.Size = UDim2.new(0, 26, 0, 26)
+    HideBtn.Position = UDim2.new(1, -36, 0, 9)
+    HideBtn.BackgroundColor3 = Color3.fromRGB(52, 34, 42)
+    HideBtn.Text = "✕"
+    HideBtn.TextColor3 = Color3.fromRGB(255, 150, 150)
+    HideBtn.Font = Enum.Font.GothamBold
+    HideBtn.TextSize = 11
+    HideBtn.AutoButtonColor = false
+    HideBtn.ZIndex = 10
+    corner(HideBtn, 100)
+    HideBtn.MouseButton1Click:Connect(function()
+        C.hidden[entry.name] = true
+        Card:Destroy()
+        refreshSettingsList()
+    end)
+end
+
+--==============================================================
+-- HOOKS LIST
+--==============================================================
+function refreshHooksList()
+    for _, c in ipairs(HooksScroll:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    local any = false
+    local order = 0
+    for name, rule in pairs(C.rules) do
+        any = true
+        order = order + 1
+        local Card = Instance.new("Frame", HooksScroll)
+        Card.Size = UDim2.new(1, -8, 0, 66)
+        Card.BackgroundColor3 = C.surface2
+        Card.BorderSizePixel = 0
+        Card.ZIndex = 5
+        Card.LayoutOrder = order
+        corner(Card, 9)
+        stroke(Card, rule.enabled and C.accent or C.border, 1, rule.enabled and 0.3 or 0.6)
+
+        local ind = Instance.new("Frame", Card)
+        ind.Size = UDim2.new(0, 3, 1, -16)
+        ind.Position = UDim2.new(0, 8, 0, 8)
+        ind.BackgroundColor3 = rule.enabled and C.good or Color3.fromRGB(70, 72, 84)
+        ind.BorderSizePixel = 0
+        ind.ZIndex = 6
+        corner(ind, 100)
+
+        local nameLbl = Instance.new("TextLabel", Card)
+        nameLbl.Size = UDim2.new(1, -190, 0, 18)
+        nameLbl.Position = UDim2.new(0, 20, 0, 8)
+        nameLbl.BackgroundTransparency = 1
+        nameLbl.Text = name
+        nameLbl.TextColor3 = rule.enabled and C.text or C.textDim
+        nameLbl.Font = Enum.Font.GothamBold
+        nameLbl.TextSize = 12
+        nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+        nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+        nameLbl.ZIndex = 6
+
+        local preview = Instance.new("TextLabel", Card)
+        preview.Size = UDim2.new(1, -190, 0, 24)
+        preview.Position = UDim2.new(0, 20, 0, 32)
+        preview.BackgroundTransparency = 1
+        preview.Text = shortPreview(rule.args, 80)
+        preview.TextColor3 = C.textMute
+        preview.Font = Enum.Font.Code
+        preview.TextSize = 10
+        preview.TextXAlignment = Enum.TextXAlignment.Left
+        preview.TextTruncate = Enum.TextTruncate.AtEnd
+        preview.ZIndex = 6
+
+        local Toggle = Instance.new("TextButton", Card)
+        Toggle.Size = UDim2.new(0, 52, 0, 26)
+        Toggle.Position = UDim2.new(1, -142, 0, 10)
+        Toggle.BackgroundColor3 = rule.enabled and C.accent or Color3.fromRGB(60, 62, 76)
+        Toggle.Text = rule.enabled and "ON" or "OFF"
+        Toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
+        Toggle.Font = Enum.Font.GothamBold
+        Toggle.TextSize = 10
+        Toggle.AutoButtonColor = false
+        Toggle.ZIndex = 8
+        corner(Toggle, 100)
+        Toggle.MouseButton1Click:Connect(function()
+            rule.enabled = not rule.enabled
+            refreshHooksList()
+            refreshHookBtn()
+        end)
+
+        local Del = Instance.new("TextButton", Card)
+        Del.Size = UDim2.new(0, 30, 0, 30)
+        Del.Position = UDim2.new(1, -40, 0.5, -15)
+        Del.BackgroundColor3 = Color3.fromRGB(52, 34, 42)
+        Del.Text = "✕"
+        Del.TextColor3 = Color3.fromRGB(255, 150, 150)
+        Del.Font = Enum.Font.GothamBold
+        Del.TextSize = 11
+        Del.AutoButtonColor = false
+        Del.ZIndex = 8
+        corner(Del, 100)
+        Del.MouseButton1Click:Connect(function()
+            C.rules[name] = nil
+            C.drafts[name] = nil
+            refreshHooksList()
+            refreshHookBtn()
+        end)
+    end
+    HooksEmpty.Visible = not any
+end
+
+--==============================================================
+-- SETTINGS LIST
+--==============================================================
+function refreshSettingsList()
+    for _, c in ipairs(SettingsScroll:GetChildren()) do
+        if c:IsA("Frame") or c:IsA("TextLabel") then c:Destroy() end
+    end
+    local order = 0
+
+    -- BLOCKED
+    order = order + 1
+    local bH = Instance.new("TextLabel", SettingsScroll)
+    bH.Size = UDim2.new(1, -8, 0, 24)
+    bH.BackgroundTransparency = 1
+    bH.Text = "🔒  BLOCKED EVENTS"
+    bH.TextColor3 = C.bad
+    bH.Font = Enum.Font.GothamBold
+    bH.TextSize = 11
+    bH.TextXAlignment = Enum.TextXAlignment.Left
+    bH.LayoutOrder = order
+    bH.ZIndex = 6
+    pad(bH, 0, 0, 14, 0)
+
+    local blockCount = 0
+    for name in pairs(C.blocked) do
+        blockCount = blockCount + 1
+        order = order + 1
+        local Card = Instance.new("Frame", SettingsScroll)
+        Card.Size = UDim2.new(1, -8, 0, 44)
+        Card.BackgroundColor3 = C.surface2
+        Card.BorderSizePixel = 0
+        Card.ZIndex = 5
+        Card.LayoutOrder = order
+        corner(Card, 8)
+        stroke(Card, C.bad, 1, 0.6)
+
+        local nameLbl = Instance.new("TextLabel", Card)
+        nameLbl.Size = UDim2.new(1, -80, 1, 0)
+        nameLbl.Position = UDim2.new(0, 14, 0, 0)
+        nameLbl.BackgroundTransparency = 1
+        nameLbl.Text = name
+        nameLbl.TextColor3 = C.text
+        nameLbl.Font = Enum.Font.GothamBold
+        nameLbl.TextSize = 12
+        nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+        nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+        nameLbl.ZIndex = 6
+
+        local RemoveBtn = Instance.new("TextButton", Card)
+        RemoveBtn.Size = UDim2.new(0, 60, 0, 28)
+        RemoveBtn.Position = UDim2.new(1, -70, 0.5, -14)
+        RemoveBtn.BackgroundColor3 = Color3.fromRGB(52, 34, 42)
+        RemoveBtn.Text = "Remove"
+        RemoveBtn.TextColor3 = Color3.fromRGB(255, 155, 160)
+        RemoveBtn.Font = Enum.Font.GothamBold
+        RemoveBtn.TextSize = 10
+        RemoveBtn.AutoButtonColor = false
+        RemoveBtn.ZIndex = 7
+        corner(RemoveBtn, 6)
+        RemoveBtn.MouseButton1Click:Connect(function()
+            C.blocked[name] = nil
+            refreshSettingsList()
+        end)
+    end
+    if blockCount == 0 then
+        order = order + 1
+        local empty = Instance.new("TextLabel", SettingsScroll)
+        empty.Size = UDim2.new(1, -8, 0, 26)
+        empty.BackgroundTransparency = 1
+        empty.Text = "No blocked events"
+        empty.TextColor3 = C.textMute
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 11
+        empty.TextXAlignment = Enum.TextXAlignment.Left
+        empty.LayoutOrder = order
+        empty.ZIndex = 6
+        pad(empty, 0, 0, 14, 0)
+    end
+
+    -- IGNORED
+    order = order + 1
+    local iH = Instance.new("TextLabel", SettingsScroll)
+    iH.Size = UDim2.new(1, -8, 0, 24)
+    iH.BackgroundTransparency = 1
+    iH.Text = "🚫  IGNORED EVENTS"
+    iH.TextColor3 = C.warn
+    iH.Font = Enum.Font.GothamBold
+    iH.TextSize = 11
+    iH.TextXAlignment = Enum.TextXAlignment.Left
+    iH.LayoutOrder = order
+    iH.ZIndex = 6
+    pad(iH, 0, 0, 14, 0)
+
+    local ignoreCount = 0
+    for name in pairs(C.hidden) do
+        ignoreCount = ignoreCount + 1
+        order = order + 1
+        local Card = Instance.new("Frame", SettingsScroll)
+        Card.Size = UDim2.new(1, -8, 0, 44)
+        Card.BackgroundColor3 = C.surface2
+        Card.BorderSizePixel = 0
+        Card.ZIndex = 5
+        Card.LayoutOrder = order
+        corner(Card, 8)
+        stroke(Card, C.warn, 1, 0.6)
+
+        local nameLbl = Instance.new("TextLabel", Card)
+        nameLbl.Size = UDim2.new(1, -80, 1, 0)
+        nameLbl.Position = UDim2.new(0, 14, 0, 0)
+        nameLbl.BackgroundTransparency = 1
+        nameLbl.Text = name
+        nameLbl.TextColor3 = C.text
+        nameLbl.Font = Enum.Font.GothamBold
+        nameLbl.TextSize = 12
+        nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+        nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+        nameLbl.ZIndex = 6
+
+        local RemoveBtn = Instance.new("TextButton", Card)
+        RemoveBtn.Size = UDim2.new(0, 60, 0, 28)
+        RemoveBtn.Position = UDim2.new(1, -70, 0.5, -14)
+        RemoveBtn.BackgroundColor3 = Color3.fromRGB(58, 48, 34)
+        RemoveBtn.Text = "Remove"
+        RemoveBtn.TextColor3 = Color3.fromRGB(255, 200, 120)
+        RemoveBtn.Font = Enum.Font.GothamBold
+        RemoveBtn.TextSize = 10
+        RemoveBtn.AutoButtonColor = false
+        RemoveBtn.ZIndex = 7
+        corner(RemoveBtn, 6)
+        RemoveBtn.MouseButton1Click:Connect(function()
+            C.hidden[name] = nil
+            refreshSettingsList()
+        end)
+    end
+    if ignoreCount == 0 then
+        order = order + 1
+        local empty = Instance.new("TextLabel", SettingsScroll)
+        empty.Size = UDim2.new(1, -8, 0, 26)
+        empty.BackgroundTransparency = 1
+        empty.Text = "No ignored events"
+        empty.TextColor3 = C.textMute
+        empty.Font = Enum.Font.Gotham
+        empty.TextSize = 11
+        empty.TextXAlignment = Enum.TextXAlignment.Left
+        empty.LayoutOrder = order
+        empty.ZIndex = 6
+        pad(empty, 0, 0, 14, 0)
+    end
+end
+
+--==============================================================
+-- SCANNER LIST
+--==============================================================
+function refreshScannerList()
+    for _, c in ipairs(ScannerScroll:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+
+    local allRemotes = getAllRemotes()
+
+    local stats = Instance.new("TextLabel", ScannerScroll)
+    stats.Size = UDim2.new(1, -8, 0, 40)
+    stats.BackgroundTransparency = 1
+    stats.Text = "Найдено ремоутов: " .. tostring(#allRemotes)
+        .. "\nВсе они логируются в Events при вызове"
+    stats.TextColor3 = C.textDim
+    stats.Font = Enum.Font.Gotham
+    stats.TextSize = 11
+    stats.TextXAlignment = Enum.TextXAlignment.Left
+    stats.TextWrapped = true
+    stats.LayoutOrder = 0
+    stats.ZIndex = 6
+    pad(stats, 0, 0, 14, 0)
+
+    local seen = {}
+    for _, r in ipairs(allRemotes) do
+        if not seen[r.name] then
+            seen[r.name] = { count = 0, paths = {}, classes = {} }
+        end
+        seen[r.name].count = seen[r.name].count + 1
+        seen[r.name].classes[r.class] = true
+        table.insert(seen[r.name].paths, r.path)
+    end
+
+    local names = {}
+    for name in pairs(seen) do table.insert(names, name) end
+    table.sort(names)
+
+    local order = 0
+    for _, name in ipairs(names) do
+        order = order + 1
+        local data = seen[name]
+
+        local Card = Instance.new("Frame", ScannerScroll)
+        Card.Size = UDim2.new(1, -8, 0, 60)
+        Card.BackgroundColor3 = C.surface2
+        Card.BorderSizePixel = 0
+        Card.ZIndex = 5
+        Card.LayoutOrder = order
+        corner(Card, 8)
+        stroke(Card, C.border, 1, 0.6)
+
+        local nameLbl = Instance.new("TextLabel", Card)
+        nameLbl.Size = UDim2.new(1, -80, 0, 20)
+        nameLbl.Position = UDim2.new(0, 14, 0, 8)
+        nameLbl.BackgroundTransparency = 1
+        nameLbl.Text = name
+        nameLbl.TextColor3 = C.text
+        nameLbl.Font = Enum.Font.GothamBold
+        nameLbl.TextSize = 12
+        nameLbl.TextXAlignment = Enum.TextXAlignment.Left
+        nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
+        nameLbl.ZIndex = 6
+
+        local classes = {}
+        for c in pairs(data.classes) do table.insert(classes, c) end
+
+        local infoLbl = Instance.new("TextLabel", Card)
+        infoLbl.Size = UDim2.new(1, -80, 0, 26)
+        infoLbl.Position = UDim2.new(0, 14, 0, 28)
+        infoLbl.BackgroundTransparency = 1
+        infoLbl.Text = table.concat(classes, ", ") .. "  •  " .. data.count .. " шт."
+        infoLbl.TextColor3 = C.textMute
+        infoLbl.Font = Enum.Font.Code
+        infoLbl.TextSize = 10
+        infoLbl.TextXAlignment = Enum.TextXAlignment.Left
+        infoLbl.TextTruncate = Enum.TextTruncate.AtEnd
+        infoLbl.ZIndex = 6
+
+        local blockBtn = Instance.new("TextButton", Card)
+        blockBtn.Size = UDim2.new(0, 60, 0, 28)
+        blockBtn.Position = UDim2.new(1, -70, 0.5, -14)
+        blockBtn.BackgroundColor3 = C.blocked[name] and Color3.fromRGB(52, 34, 42) or C.surface3
+        blockBtn.Text = C.blocked[name] and "Unblock" or "Block"
+        blockBtn.TextColor3 = C.blocked[name] and Color3.fromRGB(255, 155, 160) or C.text
+        blockBtn.Font = Enum.Font.GothamBold
+        blockBtn.TextSize = 10
+        blockBtn.AutoButtonColor = false
+        blockBtn.ZIndex = 7
+        corner(blockBtn, 6)
+        blockBtn.MouseButton1Click:Connect(function()
+            if C.blocked[name] then
+                C.blocked[name] = nil
+            else
+                C.blocked[name] = true
+            end
+            refreshScannerList()
+            refreshSettingsList()
+        end)
+    end
+end
+
+RescanBtn.MouseButton1Click:Connect(function()
+    refreshScannerList()
+end)
+
+--==============================================================
+-- RENDER LOOP
+--==============================================================
+local renderedKeys = {}
+ClearBtn.MouseButton1Click:Connect(function()
+    EventLog = {}
+    renderedKeys = {}
+    for _, c in ipairs(Scroll:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+end)
+
+task.spawn(function()
+    while ScreenGui.Parent do
+        for _, entry in ipairs(EventLog) do
+            local key = entry.time .. "_" .. entry.name
+            if not renderedKeys[key] then
+                renderedKeys[key] = true
+                createEventCard(entry)
+            end
+        end
+        task.wait(0.25)
+    end
+end)
+
+--==============================================================
+-- VISIBILITY CONTROL
+--==============================================================
+local menuVisible = true
+local function applyVisibility()
+    Main.Visible = menuVisible
+    Shadow.Visible = menuVisible
+    if EditorWindow then EditorWindow.Visible = menuVisible end
+    if EditorShadow then EditorShadow.Visible = menuVisible end
+    if ContextMenu then ContextMenu.Visible = menuVisible end
+end
+
+UIS.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.H then
+        menuVisible = not menuVisible
+        applyVisibility()
+    end
+end)
+
+CloseBtn.MouseButton1Click:Connect(function()
+    ScreenGui.Enabled = false
+    menuVisible = true
+end)
+
+--==============================================================
+-- START
+--==============================================================
+setTab("events")
+refreshHookBtn()
