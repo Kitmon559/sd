@@ -1,5 +1,5 @@
 --==============================================================
--- RSPY Universal Hook Menu v11
+-- RSPY Universal Hook Menu v12
 -- BIND: H | LMB edit | RMB options
 --==============================================================
 
@@ -15,9 +15,7 @@ local C = {
     hidden  = {},
     blocked = {},
     drafts  = {},
-
-    debugMode   = false,
-    scanGame    = true,
+    debugMode = false,
 
     bgTop     = Color3.fromRGB(22, 24, 34),
     bgBot     = Color3.fromRGB(14, 15, 22),
@@ -110,9 +108,7 @@ end
 -- ИНДЕКС ВСЕХ REMOTE В ИГРЕ
 --==============================================================
 local function getAllRemotes()
-    local remotes = {}
-    local seen = {}
-
+    local remotes, seen = {}, {}
     local function scan(container, path)
         if not container then return end
         local ok, children = pcall(function() return container:GetChildren() end)
@@ -136,7 +132,6 @@ local function getAllRemotes()
             end
         end
     end
-
     scan(RS, "ReplicatedStorage")
     scan(workspace, "Workspace")
     scan(game:GetService("ReplicatedFirst"), "ReplicatedFirst")
@@ -150,14 +145,15 @@ local function getAllRemotes()
         scan(lp:FindFirstChild("PlayerScripts"), "LocalPlayer.PlayerScripts")
         scan(lp:FindFirstChild("Backpack"), "LocalPlayer.Backpack")
     end
-
     return remotes
 end
 
 --==============================================================
--- HOOK (fixed vararg)
+-- HOOK — группировка по имени
 --==============================================================
+-- EventLog: [remoteName] = { name, method, args, count, firstTime, lastTime, className }
 local EventLog = {}
+local EventOrder = {}   -- порядок появления имён (свежие первыми)
 local MAX_LOG = 200
 local lastByRemote = {}
 
@@ -177,13 +173,25 @@ origNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
             local now = os.clock()
             if not lastByRemote["DBG_" .. rName] or now - lastByRemote["DBG_" .. rName] > 0.5 then
                 lastByRemote["DBG_" .. rName] = now
-                table.insert(EventLog, 1, {
-                    name = rName, method = m,
-                    args = args,
-                    time = now,
-                    debug = true,
-                })
-                if #EventLog > MAX_LOG then table.remove(EventLog) end
+                local entry = EventLog[rName]
+                if entry then
+                    entry.count = entry.count + 1
+                    entry.lastTime = now
+                    entry.method = m
+                    entry.args = args
+                else
+                    EventLog[rName] = {
+                        name = rName, method = m, args = args,
+                        count = 1, firstTime = now, lastTime = now,
+                        className = typeof(self) == "Instance" and self.ClassName or "?",
+                        debug = true,
+                    }
+                    table.insert(EventOrder, 1, rName)
+                    if #EventOrder > MAX_LOG then
+                        local removed = table.remove(EventOrder)
+                        EventLog[removed] = nil
+                    end
+                end
             end
         end)
     end
@@ -199,13 +207,24 @@ origNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...
             local now = os.clock()
             if not lastByRemote[rName] or now - lastByRemote[rName] > 0.1 then
                 lastByRemote[rName] = now
-                table.insert(EventLog, 1, {
-                    name = rName, method = m,
-                    args = args,
-                    time = now,
-                    className = typeof(self) == "Instance" and self.ClassName or "?",
-                })
-                if #EventLog > MAX_LOG then table.remove(EventLog) end
+                local entry = EventLog[rName]
+                if entry then
+                    entry.count = entry.count + 1
+                    entry.lastTime = now
+                    entry.method = m
+                    entry.args = args
+                else
+                    EventLog[rName] = {
+                        name = rName, method = m, args = args,
+                        count = 1, firstTime = now, lastTime = now,
+                        className = typeof(self) == "Instance" and self.ClassName or "?",
+                    }
+                    table.insert(EventOrder, 1, rName)
+                    if #EventOrder > MAX_LOG then
+                        local removed = table.remove(EventOrder)
+                        EventLog[removed] = nil
+                    end
+                end
             end
         end
 
@@ -339,28 +358,28 @@ ScreenGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
 ScreenGui.Parent = CoreGui
 
 --==============================================================
--- MAIN WINDOW
+-- MAIN WINDOW (крупнее)
 --==============================================================
 local Shadow = Instance.new("Frame")
-Shadow.Size = UDim2.new(0, 640, 0, 560)
-Shadow.Position = UDim2.new(0.5, -320, 0.5, -280)
+Shadow.Size = UDim2.new(0, 760, 0, 640)
+Shadow.Position = UDim2.new(0.5, -380, 0.5, -320)
 Shadow.BackgroundColor3 = Color3.fromRGB(0, 0, 0)
 Shadow.BackgroundTransparency = 0.65
 Shadow.BorderSizePixel = 0
 Shadow.ZIndex = 0
 Shadow.Parent = ScreenGui
-corner(Shadow, 18)
+corner(Shadow, 20)
 
 local Main = Instance.new("Frame")
-Main.Size = UDim2.new(0, 640, 0, 560)
-Main.Position = UDim2.new(0.5, -320, 0.5, -280)
+Main.Size = UDim2.new(0, 760, 0, 640)
+Main.Position = UDim2.new(0.5, -380, 0.5, -320)
 Main.BackgroundColor3 = C.bgTop
 Main.BorderSizePixel = 0
 Main.Active = true
 Main.ClipsDescendants = true
 Main.ZIndex = 2
 Main.Parent = ScreenGui
-corner(Main, 14)
+corner(Main, 16)
 
 local bgGrad = Instance.new("UIGradient", Main)
 bgGrad.Color = ColorSequence.new(C.bgTop, C.bgBot)
@@ -380,7 +399,7 @@ syncShadow()
 -- TITLE BAR
 --==============================================================
 local TitleBar = Instance.new("Frame")
-TitleBar.Size = UDim2.new(1, 0, 0, 54)
+TitleBar.Size = UDim2.new(1, 0, 0, 62)
 TitleBar.BackgroundTransparency = 1
 TitleBar.ZIndex = 3
 TitleBar.Parent = Main
@@ -410,12 +429,12 @@ do
 end
 
 local Logo = Instance.new("Frame", Main)
-Logo.Size = UDim2.new(0, 36, 0, 36)
-Logo.Position = UDim2.new(0, 16, 0, 9)
+Logo.Size = UDim2.new(0, 42, 0, 42)
+Logo.Position = UDim2.new(0, 18, 0, 10)
 Logo.BackgroundColor3 = C.accent
 Logo.BorderSizePixel = 0
 Logo.ZIndex = 4
-corner(Logo, 10)
+corner(Logo, 12)
 local lg = Instance.new("UIGradient", Logo)
 lg.Color = ColorSequence.new(C.accent, C.accent2)
 lg.Rotation = 45
@@ -426,53 +445,53 @@ LogoText.BackgroundTransparency = 1
 LogoText.Text = "R"
 LogoText.TextColor3 = Color3.fromRGB(255, 255, 255)
 LogoText.Font = Enum.Font.GothamBlack
-LogoText.TextSize = 20
+LogoText.TextSize = 24
 LogoText.ZIndex = 5
 
 local Title = Instance.new("TextLabel", Main)
-Title.Size = UDim2.new(1, -240, 0, 20)
-Title.Position = UDim2.new(0, 62, 0, 11)
+Title.Size = UDim2.new(1, -280, 0, 24)
+Title.Position = UDim2.new(0, 72, 0, 12)
 Title.BackgroundTransparency = 1
 Title.Text = "Universal Hook"
 Title.TextColor3 = C.text
 Title.Font = Enum.Font.GothamBold
-Title.TextSize = 15
+Title.TextSize = 18
 Title.TextXAlignment = Enum.TextXAlignment.Left
 Title.ZIndex = 4
 
 local Subtitle = Instance.new("TextLabel", Main)
-Subtitle.Size = UDim2.new(1, -240, 0, 14)
-Subtitle.Position = UDim2.new(0, 62, 0, 30)
+Subtitle.Size = UDim2.new(1, -280, 0, 16)
+Subtitle.Position = UDim2.new(0, 72, 0, 36)
 Subtitle.BackgroundTransparency = 1
 Subtitle.Text = "H — toggle • LMB edit • RMB options"
 Subtitle.TextColor3 = C.textDim
 Subtitle.Font = Enum.Font.Gotham
-Subtitle.TextSize = 11
+Subtitle.TextSize = 12
 Subtitle.TextXAlignment = Enum.TextXAlignment.Left
 Subtitle.ZIndex = 4
 
 local HookStatus = Instance.new("TextLabel", Main)
-HookStatus.Size = UDim2.new(0, 90, 0, 24)
-HookStatus.Position = UDim2.new(1, -166, 0, 15)
+HookStatus.Size = UDim2.new(0, 100, 0, 28)
+HookStatus.Position = UDim2.new(1, -186, 0, 17)
 HookStatus.BackgroundColor3 = Color3.fromRGB(60, 30, 35)
 HookStatus.Text = "HOOK OFF"
 HookStatus.TextColor3 = C.bad
 HookStatus.Font = Enum.Font.GothamBold
-HookStatus.TextSize = 10
+HookStatus.TextSize = 11
 HookStatus.ZIndex = 4
 corner(HookStatus, 100)
 
 local CloseBtn = Instance.new("TextButton", Main)
-CloseBtn.Size = UDim2.new(0, 32, 0, 32)
-CloseBtn.Position = UDim2.new(1, -44, 0, 11)
+CloseBtn.Size = UDim2.new(0, 36, 0, 36)
+CloseBtn.Position = UDim2.new(1, -50, 0, 13)
 CloseBtn.BackgroundColor3 = Color3.fromRGB(52, 52, 66)
 CloseBtn.Text = "✕"
 CloseBtn.TextColor3 = Color3.fromRGB(220, 224, 240)
 CloseBtn.Font = Enum.Font.GothamBold
-CloseBtn.TextSize = 14
+CloseBtn.TextSize = 15
 CloseBtn.AutoButtonColor = false
 CloseBtn.ZIndex = 5
-corner(CloseBtn, 9)
+corner(CloseBtn, 10)
 CloseBtn.MouseEnter:Connect(function()
     Tween:Create(CloseBtn, TweenInfo.new(0.15), {BackgroundColor3 = Color3.fromRGB(215, 70, 82)}):Play()
 end)
@@ -481,8 +500,8 @@ CloseBtn.MouseLeave:Connect(function()
 end)
 
 local divider = Instance.new("Frame", Main)
-divider.Size = UDim2.new(1, -32, 0, 1)
-divider.Position = UDim2.new(0, 16, 0, 54)
+divider.Size = UDim2.new(1, -36, 0, 1)
+divider.Position = UDim2.new(0, 18, 0, 62)
 divider.BackgroundColor3 = C.border
 divider.BackgroundTransparency = 0.5
 divider.BorderSizePixel = 0
@@ -492,23 +511,23 @@ divider.ZIndex = 4
 -- HOOK TOGGLE
 --==============================================================
 local HookBtn = Instance.new("TextButton", Main)
-HookBtn.Size = UDim2.new(1, -32, 0, 48)
-HookBtn.Position = UDim2.new(0, 16, 0, 66)
+HookBtn.Size = UDim2.new(1, -36, 0, 54)
+HookBtn.Position = UDim2.new(0, 18, 0, 76)
 HookBtn.BackgroundColor3 = C.surface
 HookBtn.Text = ""
 HookBtn.AutoButtonColor = false
 HookBtn.ZIndex = 4
-corner(HookBtn, 11)
+corner(HookBtn, 12)
 
 local HookStroke = stroke(HookBtn, C.border, 1, 0.4)
 
 local HookIconWrap = Instance.new("Frame", HookBtn)
-HookIconWrap.Size = UDim2.new(0, 32, 0, 32)
+HookIconWrap.Size = UDim2.new(0, 38, 0, 38)
 HookIconWrap.Position = UDim2.new(0, 8, 0, 8)
 HookIconWrap.BackgroundColor3 = Color3.fromRGB(42, 46, 64)
 HookIconWrap.BorderSizePixel = 0
 HookIconWrap.ZIndex = 5
-corner(HookIconWrap, 9)
+corner(HookIconWrap, 10)
 
 local HookIcon = Instance.new("TextLabel", HookIconWrap)
 HookIcon.Size = UDim2.new(1, 0, 1, 0)
@@ -516,28 +535,28 @@ HookIcon.BackgroundTransparency = 1
 HookIcon.Text = "⚡"
 HookIcon.TextColor3 = C.accent
 HookIcon.Font = Enum.Font.GothamBold
-HookIcon.TextSize = 17
+HookIcon.TextSize = 20
 HookIcon.ZIndex = 6
 
 local HookLabel = Instance.new("TextLabel", HookBtn)
-HookLabel.Size = UDim2.new(1, -180, 1, 0)
-HookLabel.Position = UDim2.new(0, 50, 0, 0)
+HookLabel.Size = UDim2.new(1, -200, 1, 0)
+HookLabel.Position = UDim2.new(0, 56, 0, 0)
 HookLabel.BackgroundTransparency = 1
 HookLabel.Text = "Hook: Disabled"
 HookLabel.TextColor3 = C.text
 HookLabel.Font = Enum.Font.GothamBold
-HookLabel.TextSize = 13
+HookLabel.TextSize = 15
 HookLabel.TextXAlignment = Enum.TextXAlignment.Left
 HookLabel.ZIndex = 5
 
 local HookCount = Instance.new("TextLabel", HookBtn)
-HookCount.Size = UDim2.new(0, 100, 1, 0)
-HookCount.Position = UDim2.new(1, -112, 0, 0)
+HookCount.Size = UDim2.new(0, 120, 1, 0)
+HookCount.Position = UDim2.new(1, -132, 0, 0)
 HookCount.BackgroundTransparency = 1
 HookCount.Text = "0/0 rules"
 HookCount.TextColor3 = C.textDim
 HookCount.Font = Enum.Font.GothamMedium
-HookCount.TextSize = 11
+HookCount.TextSize = 12
 HookCount.TextXAlignment = Enum.TextXAlignment.Right
 HookCount.ZIndex = 5
 
@@ -585,15 +604,15 @@ HookBtn.MouseButton1Click:Connect(function()
 end)
 
 --==============================================================
--- TAB BAR (4 вкладки)
+-- TAB BAR
 --==============================================================
 local TabBar = Instance.new("Frame", Main)
-TabBar.Size = UDim2.new(1, -32, 0, 34)
-TabBar.Position = UDim2.new(0, 16, 0, 124)
+TabBar.Size = UDim2.new(1, -36, 0, 40)
+TabBar.Position = UDim2.new(0, 18, 0, 142)
 TabBar.BackgroundColor3 = C.surface
 TabBar.BorderSizePixel = 0
 TabBar.ZIndex = 4
-corner(TabBar, 10)
+corner(TabBar, 12)
 
 local TabBarLayout = Instance.new("UIListLayout", TabBar)
 TabBarLayout.FillDirection = Enum.FillDirection.Horizontal
@@ -604,34 +623,34 @@ pad(TabBar, 0, 0, 4, 4)
 
 local function createTab(name, order, width)
     local btn = Instance.new("TextButton", TabBar)
-    btn.Size = UDim2.new(0, width or 110, 0, 26)
+    btn.Size = UDim2.new(0, width or 130, 0, 32)
     btn.BackgroundColor3 = C.surface
     btn.Text = name
     btn.TextColor3 = C.textDim
     btn.Font = Enum.Font.GothamBold
-    btn.TextSize = 11
+    btn.TextSize = 12
     btn.AutoButtonColor = false
     btn.LayoutOrder = order
     btn.ZIndex = 5
-    corner(btn, 8)
+    corner(btn, 9)
     return btn
 end
 
-local EventsTabBtn   = createTab("Events",   1, 90)
-local HooksTabBtn    = createTab("Hooks",    2, 80)
-local SettingsTabBtn = createTab("Settings", 3, 90)
-local ScannerTabBtn  = createTab("Scanner",  4, 90)
+local EventsTabBtn   = createTab("Events",   1, 110)
+local HooksTabBtn    = createTab("Hooks",    2, 100)
+local SettingsTabBtn = createTab("Settings", 3, 110)
+local ScannerTabBtn  = createTab("Scanner",  4, 110)
 
 --==============================================================
 -- CONTENT AREA
 --==============================================================
 local ContentArea = Instance.new("Frame", Main)
-ContentArea.Size = UDim2.new(1, -32, 1, -216)
-ContentArea.Position = UDim2.new(0, 16, 0, 166)
+ContentArea.Size = UDim2.new(1, -36, 1, -248)
+ContentArea.Position = UDim2.new(0, 18, 0, 192)
 ContentArea.BackgroundColor3 = C.surface
 ContentArea.BorderSizePixel = 0
 ContentArea.ZIndex = 4
-corner(ContentArea, 12)
+corner(ContentArea, 14)
 stroke(ContentArea, C.border, 1, 0.6)
 
 --==============================================================
@@ -644,48 +663,48 @@ EventsPage.ZIndex = 5
 EventsPage.Visible = true
 
 local EventsTop = Instance.new("Frame", EventsPage)
-EventsTop.Size = UDim2.new(1, 0, 0, 38)
+EventsTop.Size = UDim2.new(1, 0, 0, 42)
 EventsTop.BackgroundTransparency = 1
 EventsTop.ZIndex = 6
 
 local EventsTitle = Instance.new("TextLabel", EventsTop)
-EventsTitle.Size = UDim2.new(1, -200, 1, 0)
-EventsTitle.Position = UDim2.new(0, 14, 0, 0)
+EventsTitle.Size = UDim2.new(1, -240, 1, 0)
+EventsTitle.Position = UDim2.new(0, 18, 0, 0)
 EventsTitle.BackgroundTransparency = 1
 EventsTitle.Text = "CAPTURED EVENTS  •  LMB edit  •  RMB options"
 EventsTitle.TextColor3 = C.textDim
 EventsTitle.Font = Enum.Font.GothamBold
-EventsTitle.TextSize = 10
+EventsTitle.TextSize = 11
 EventsTitle.TextXAlignment = Enum.TextXAlignment.Left
 EventsTitle.ZIndex = 7
 
 local ClearBtn = Instance.new("TextButton", EventsTop)
-ClearBtn.Size = UDim2.new(0, 64, 0, 24)
-ClearBtn.Position = UDim2.new(1, -76, 0.5, -12)
+ClearBtn.Size = UDim2.new(0, 76, 0, 28)
+ClearBtn.Position = UDim2.new(1, -94, 0.5, -14)
 ClearBtn.BackgroundColor3 = Color3.fromRGB(58, 36, 44)
 ClearBtn.Text = "Clear"
 ClearBtn.TextColor3 = Color3.fromRGB(255, 155, 160)
 ClearBtn.Font = Enum.Font.GothamBold
-ClearBtn.TextSize = 10
+ClearBtn.TextSize = 11
 ClearBtn.AutoButtonColor = false
 ClearBtn.ZIndex = 7
-corner(ClearBtn, 7)
+corner(ClearBtn, 8)
 
 local Scroll = Instance.new("ScrollingFrame", EventsPage)
 Scroll.Name = "EventScroll"
-Scroll.Size = UDim2.new(1, -16, 1, -46)
-Scroll.Position = UDim2.new(0, 8, 0, 40)
+Scroll.Size = UDim2.new(1, -20, 1, -52)
+Scroll.Position = UDim2.new(0, 10, 0, 44)
 Scroll.BackgroundTransparency = 1
 Scroll.BorderSizePixel = 0
-Scroll.ScrollBarThickness = 4
+Scroll.ScrollBarThickness = 5
 Scroll.ScrollBarImageColor3 = C.accent
 Scroll.ScrollBarImageTransparency = 0.2
 Scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 Scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 Scroll.ZIndex = 5
 Scroll.Active = true
-vlist(Scroll, 6)
-pad(Scroll, 4, 4, 4, 4)
+vlist(Scroll, 8)
+pad(Scroll, 6, 6, 6, 6)
 
 --==============================================================
 -- HOOKS PAGE
@@ -697,28 +716,28 @@ HooksPage.ZIndex = 5
 HooksPage.Visible = false
 
 local HooksScroll = Instance.new("ScrollingFrame", HooksPage)
-HooksScroll.Size = UDim2.new(1, -16, 1, -46)
-HooksScroll.Position = UDim2.new(0, 8, 0, 40)
+HooksScroll.Size = UDim2.new(1, -20, 1, -52)
+HooksScroll.Position = UDim2.new(0, 10, 0, 44)
 HooksScroll.BackgroundTransparency = 1
 HooksScroll.BorderSizePixel = 0
-HooksScroll.ScrollBarThickness = 4
+HooksScroll.ScrollBarThickness = 5
 HooksScroll.ScrollBarImageColor3 = C.accent
 HooksScroll.ScrollBarImageTransparency = 0.2
 HooksScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 HooksScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 HooksScroll.ZIndex = 5
 HooksScroll.Active = true
-vlist(HooksScroll, 6)
-pad(HooksScroll, 4, 4, 4, 4)
+vlist(HooksScroll, 8)
+pad(HooksScroll, 6, 6, 6, 6)
 
 local HooksEmpty = Instance.new("TextLabel", HooksPage)
-HooksEmpty.Size = UDim2.new(1, -40, 0, 60)
-HooksEmpty.Position = UDim2.new(0, 20, 0.5, -30)
+HooksEmpty.Size = UDim2.new(1, -60, 0, 80)
+HooksEmpty.Position = UDim2.new(0, 30, 0.5, -40)
 HooksEmpty.BackgroundTransparency = 1
 HooksEmpty.Text = "No hooks yet.\n\nGo to Events → click any event → Apply always"
 HooksEmpty.TextColor3 = C.textMute
 HooksEmpty.Font = Enum.Font.Gotham
-HooksEmpty.TextSize = 12
+HooksEmpty.TextSize = 13
 HooksEmpty.TextWrapped = true
 HooksEmpty.Visible = false
 HooksEmpty.ZIndex = 6
@@ -733,19 +752,19 @@ SettingsPage.ZIndex = 5
 SettingsPage.Visible = false
 
 local SettingsScroll = Instance.new("ScrollingFrame", SettingsPage)
-SettingsScroll.Size = UDim2.new(1, -16, 1, -16)
-SettingsScroll.Position = UDim2.new(0, 8, 0, 8)
+SettingsScroll.Size = UDim2.new(1, -20, 1, -20)
+SettingsScroll.Position = UDim2.new(0, 10, 0, 10)
 SettingsScroll.BackgroundTransparency = 1
 SettingsScroll.BorderSizePixel = 0
-SettingsScroll.ScrollBarThickness = 4
+SettingsScroll.ScrollBarThickness = 5
 SettingsScroll.ScrollBarImageColor3 = C.accent
 SettingsScroll.ScrollBarImageTransparency = 0.2
 SettingsScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 SettingsScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 SettingsScroll.ZIndex = 5
 SettingsScroll.Active = true
-vlist(SettingsScroll, 8)
-pad(SettingsScroll, 4, 4, 4, 4)
+vlist(SettingsScroll, 10)
+pad(SettingsScroll, 6, 6, 6, 6)
 
 --==============================================================
 -- SCANNER PAGE
@@ -757,59 +776,59 @@ ScannerPage.ZIndex = 5
 ScannerPage.Visible = false
 
 local ScannerTop = Instance.new("Frame", ScannerPage)
-ScannerTop.Size = UDim2.new(1, 0, 0, 38)
+ScannerTop.Size = UDim2.new(1, 0, 0, 42)
 ScannerTop.BackgroundTransparency = 1
 ScannerTop.ZIndex = 6
 
 local ScannerTitle = Instance.new("TextLabel", ScannerTop)
-ScannerTitle.Size = UDim2.new(1, -260, 1, 0)
-ScannerTitle.Position = UDim2.new(0, 14, 0, 0)
+ScannerTitle.Size = UDim2.new(1, -300, 1, 0)
+ScannerTitle.Position = UDim2.new(0, 18, 0, 0)
 ScannerTitle.BackgroundTransparency = 1
 ScannerTitle.Text = "GAME REMOTES"
 ScannerTitle.TextColor3 = C.textDim
 ScannerTitle.Font = Enum.Font.GothamBold
-ScannerTitle.TextSize = 10
+ScannerTitle.TextSize = 11
 ScannerTitle.TextXAlignment = Enum.TextXAlignment.Left
 ScannerTitle.ZIndex = 7
 
 local DebugToggle = Instance.new("TextButton", ScannerTop)
-DebugToggle.Size = UDim2.new(0, 76, 0, 24)
-DebugToggle.Position = UDim2.new(1, -152, 0.5, -12)
+DebugToggle.Size = UDim2.new(0, 90, 0, 28)
+DebugToggle.Position = UDim2.new(1, -180, 0.5, -14)
 DebugToggle.BackgroundColor3 = C.surface2
 DebugToggle.Text = "Debug: OFF"
 DebugToggle.TextColor3 = C.textDim
 DebugToggle.Font = Enum.Font.GothamBold
-DebugToggle.TextSize = 9
+DebugToggle.TextSize = 10
 DebugToggle.AutoButtonColor = false
 DebugToggle.ZIndex = 7
-corner(DebugToggle, 7)
+corner(DebugToggle, 8)
 
 local RescanBtn = Instance.new("TextButton", ScannerTop)
-RescanBtn.Size = UDim2.new(0, 64, 0, 24)
-RescanBtn.Position = UDim2.new(1, -76, 0.5, -12)
+RescanBtn.Size = UDim2.new(0, 76, 0, 28)
+RescanBtn.Position = UDim2.new(1, -86, 0.5, -14)
 RescanBtn.BackgroundColor3 = C.accent
 RescanBtn.Text = "Rescan"
 RescanBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
 RescanBtn.Font = Enum.Font.GothamBold
-RescanBtn.TextSize = 10
+RescanBtn.TextSize = 11
 RescanBtn.AutoButtonColor = false
 RescanBtn.ZIndex = 7
-corner(RescanBtn, 7)
+corner(RescanBtn, 8)
 
 local ScannerScroll = Instance.new("ScrollingFrame", ScannerPage)
-ScannerScroll.Size = UDim2.new(1, -16, 1, -46)
-ScannerScroll.Position = UDim2.new(0, 8, 0, 40)
+ScannerScroll.Size = UDim2.new(1, -20, 1, -52)
+ScannerScroll.Position = UDim2.new(0, 10, 0, 44)
 ScannerScroll.BackgroundTransparency = 1
 ScannerScroll.BorderSizePixel = 0
-ScannerScroll.ScrollBarThickness = 4
+ScannerScroll.ScrollBarThickness = 5
 ScannerScroll.ScrollBarImageColor3 = C.accent
 ScannerScroll.ScrollBarImageTransparency = 0.2
 ScannerScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
 ScannerScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
 ScannerScroll.ZIndex = 5
 ScannerScroll.Active = true
-vlist(ScannerScroll, 6)
-pad(ScannerScroll, 4, 4, 4, 4)
+vlist(ScannerScroll, 8)
+pad(ScannerScroll, 6, 6, 6, 6)
 
 DebugToggle.MouseButton1Click:Connect(function()
     C.debugMode = not C.debugMode
@@ -864,19 +883,19 @@ ScannerTabBtn.MouseButton1Click:Connect(function() setTab("scanner") end)
 -- RESIZE
 --==============================================================
 local ResizeHandle = Instance.new("TextButton", Main)
-ResizeHandle.Size = UDim2.new(0, 26, 0, 26)
-ResizeHandle.Position = UDim2.new(1, -34, 1, -34)
+ResizeHandle.Size = UDim2.new(0, 30, 0, 30)
+ResizeHandle.Position = UDim2.new(1, -40, 1, -40)
 ResizeHandle.BackgroundColor3 = C.accent
 ResizeHandle.BackgroundTransparency = 0.15
 ResizeHandle.Text = "◢"
 ResizeHandle.TextColor3 = Color3.fromRGB(255, 255, 255)
 ResizeHandle.Font = Enum.Font.GothamBold
-ResizeHandle.TextSize = 13
+ResizeHandle.TextSize = 14
 ResizeHandle.AutoButtonColor = false
 ResizeHandle.Active = true
 ResizeHandle.ZIndex = 100
 ResizeHandle.Parent = Main
-corner(ResizeHandle, 8)
+corner(ResizeHandle, 9)
 
 do
     local resizing, startInput, startSize
@@ -896,8 +915,8 @@ do
         or input.UserInputType == Enum.UserInputType.Touch) then
             local d = input.Position - startInput
             Main.Size = UDim2.new(0,
-                math.max(500, startSize.X.Offset + d.X), 0,
-                math.max(420, startSize.Y.Offset + d.Y))
+                math.max(560, startSize.X.Offset + d.X), 0,
+                math.max(480, startSize.Y.Offset + d.Y))
         end
     end)
 end
@@ -918,8 +937,8 @@ local function openEditor(entry)
         EditorShadow:Destroy()
     end
 
-    local startPos = UDim2.new(0.5, -120, 0.5, -180)
-    local startSize = UDim2.new(0, 480, 0, 440)
+    local startPos = UDim2.new(0.5, -160, 0.5, -200)
+    local startSize = UDim2.new(0, 560, 0, 500)
 
     EditorShadow = Instance.new("Frame", ScreenGui)
     EditorShadow.Size = startSize
@@ -928,7 +947,7 @@ local function openEditor(entry)
     EditorShadow.BackgroundTransparency = 0.6
     EditorShadow.BorderSizePixel = 0
     EditorShadow.ZIndex = 200
-    corner(EditorShadow, 18)
+    corner(EditorShadow, 20)
 
     EditorWindow = Instance.new("Frame", ScreenGui)
     EditorWindow.Name = "EditorWindow"
@@ -939,7 +958,7 @@ local function openEditor(entry)
     EditorWindow.Active = true
     EditorWindow.ClipsDescendants = true
     EditorWindow.ZIndex = 202
-    corner(EditorWindow, 14)
+    corner(EditorWindow, 16)
     stroke(EditorWindow, C.borderLt, 1, 0.3)
 
     local edGrad = Instance.new("UIGradient", EditorWindow)
@@ -954,41 +973,41 @@ local function openEditor(entry)
     EditorWindow:GetPropertyChangedSignal("Position"):Connect(syncEdShadow)
 
     local EdTitleBar = Instance.new("Frame", EditorWindow)
-    EdTitleBar.Size = UDim2.new(1, 0, 0, 46)
+    EdTitleBar.Size = UDim2.new(1, 0, 0, 54)
     EdTitleBar.BackgroundColor3 = C.surface2
     EdTitleBar.BorderSizePixel = 0
     EdTitleBar.ZIndex = 203
-    corner(EdTitleBar, 14)
+    corner(EdTitleBar, 16)
     local fix = Instance.new("Frame", EdTitleBar)
-    fix.Size = UDim2.new(1, 0, 0, 12)
-    fix.Position = UDim2.new(0, 0, 1, -12)
+    fix.Size = UDim2.new(1, 0, 0, 14)
+    fix.Position = UDim2.new(0, 0, 1, -14)
     fix.BackgroundColor3 = C.surface2
     fix.BorderSizePixel = 0
     fix.ZIndex = 203
 
     local EdTitle = Instance.new("TextLabel", EdTitleBar)
-    EdTitle.Size = UDim2.new(1, -50, 1, 0)
-    EdTitle.Position = UDim2.new(0, 14, 0, 0)
+    EdTitle.Size = UDim2.new(1, -60, 1, 0)
+    EdTitle.Position = UDim2.new(0, 18, 0, 0)
     EdTitle.BackgroundTransparency = 1
     EdTitle.Text = "✎  " .. entry.method .. " → " .. entry.name
     EdTitle.TextColor3 = C.text
     EdTitle.Font = Enum.Font.GothamBold
-    EdTitle.TextSize = 12
+    EdTitle.TextSize = 14
     EdTitle.TextXAlignment = Enum.TextXAlignment.Left
     EdTitle.TextTruncate = Enum.TextTruncate.AtEnd
     EdTitle.ZIndex = 205
 
     local EdClose = Instance.new("TextButton", EdTitleBar)
-    EdClose.Size = UDim2.new(0, 30, 0, 30)
-    EdClose.Position = UDim2.new(1, -38, 0.5, -15)
+    EdClose.Size = UDim2.new(0, 34, 0, 34)
+    EdClose.Position = UDim2.new(1, -44, 0.5, -17)
     EdClose.BackgroundColor3 = Color3.fromRGB(58, 36, 44)
     EdClose.Text = "✕"
     EdClose.TextColor3 = Color3.fromRGB(255, 180, 180)
     EdClose.Font = Enum.Font.GothamBold
-    EdClose.TextSize = 12
+    EdClose.TextSize = 14
     EdClose.AutoButtonColor = false
     EdClose.ZIndex = 205
-    corner(EdClose, 8)
+    corner(EdClose, 9)
     EdClose.MouseButton1Click:Connect(function() destroyEditor() end)
 
     do
@@ -1016,17 +1035,17 @@ local function openEditor(entry)
     end
 
     local EdResize = Instance.new("TextButton", EditorWindow)
-    EdResize.Size = UDim2.new(0, 24, 0, 24)
-    EdResize.Position = UDim2.new(1, -32, 1, -32)
+    EdResize.Size = UDim2.new(0, 28, 0, 28)
+    EdResize.Position = UDim2.new(1, -38, 1, -38)
     EdResize.BackgroundColor3 = C.accent
     EdResize.BackgroundTransparency = 0.15
     EdResize.Text = "◢"
     EdResize.TextColor3 = Color3.fromRGB(255, 255, 255)
     EdResize.Font = Enum.Font.GothamBold
-    EdResize.TextSize = 12
+    EdResize.TextSize = 13
     EdResize.AutoButtonColor = false
     EdResize.ZIndex = 210
-    corner(EdResize, 7)
+    corner(EdResize, 8)
 
     do
         local resizing, startInput, startSize
@@ -1046,24 +1065,24 @@ local function openEditor(entry)
             or input.UserInputType == Enum.UserInputType.Touch) then
                 local d = input.Position - startInput
                 EditorWindow.Size = UDim2.new(0,
-                    math.max(360, startSize.X.Offset + d.X), 0,
-                    math.max(300, startSize.Y.Offset + d.Y))
+                    math.max(420, startSize.X.Offset + d.X), 0,
+                    math.max(360, startSize.Y.Offset + d.Y))
             end
         end)
     end
 
     local ArgScroll = Instance.new("ScrollingFrame", EditorWindow)
-    ArgScroll.Size = UDim2.new(1, -20, 1, -152)
-    ArgScroll.Position = UDim2.new(0, 10, 0, 54)
+    ArgScroll.Size = UDim2.new(1, -24, 1, -176)
+    ArgScroll.Position = UDim2.new(0, 12, 0, 64)
     ArgScroll.BackgroundTransparency = 1
     ArgScroll.BorderSizePixel = 0
-    ArgScroll.ScrollBarThickness = 4
+    ArgScroll.ScrollBarThickness = 5
     ArgScroll.ScrollBarImageColor3 = C.accent
     ArgScroll.CanvasSize = UDim2.new(0, 0, 0, 0)
     ArgScroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
     ArgScroll.ZIndex = 203
-    vlist(ArgScroll, 8)
-    pad(ArgScroll, 4, 4, 4, 4)
+    vlist(ArgScroll, 10)
+    pad(ArgScroll, 6, 6, 6, 6)
 
     local sourceArgs = entry.args
     if C.rules[entry.name] and C.rules[entry.name].args then
@@ -1077,54 +1096,54 @@ local function openEditor(entry)
 
     local function makeField(parent, layoutOrder, labelText, initialValue, onChanged)
         local wrap = Instance.new("Frame", parent)
-        wrap.Size = UDim2.new(1, 0, 0, 58)
+        wrap.Size = UDim2.new(1, 0, 0, 66)
         wrap.BackgroundColor3 = C.surface2
         wrap.BorderSizePixel = 0
         wrap.LayoutOrder = layoutOrder
         wrap.ZIndex = 22
-        corner(wrap, 8)
-        pad(wrap, 6, 6, 10, 10)
+        corner(wrap, 9)
+        pad(wrap, 8, 8, 12, 12)
 
         local lbl = Instance.new("TextLabel", wrap)
-        lbl.Size = UDim2.new(1, 0, 0, 14)
+        lbl.Size = UDim2.new(1, 0, 0, 16)
         lbl.BackgroundTransparency = 1
         lbl.Text = labelText
         lbl.TextColor3 = C.accent
         lbl.Font = Enum.Font.GothamBold
-        lbl.TextSize = 10
+        lbl.TextSize = 11
         lbl.TextXAlignment = Enum.TextXAlignment.Left
         lbl.ZIndex = 23
 
         local boxWrap = Instance.new("Frame", wrap)
-        boxWrap.Size = UDim2.new(1, 0, 0, 30)
-        boxWrap.Position = UDim2.new(0, 0, 0, 22)
+        boxWrap.Size = UDim2.new(1, 0, 0, 34)
+        boxWrap.Position = UDim2.new(0, 0, 0, 24)
         boxWrap.BackgroundColor3 = C.input
         boxWrap.BorderSizePixel = 0
         boxWrap.ZIndex = 23
-        corner(boxWrap, 6)
+        corner(boxWrap, 7)
         local bs = stroke(boxWrap, C.border, 1, 0.3)
 
         local box = Instance.new("TextBox", boxWrap)
-        box.Size = UDim2.new(1, -16, 1, 0)
-        box.Position = UDim2.new(0, 8, 0, 0)
+        box.Size = UDim2.new(1, -20, 1, 0)
+        box.Position = UDim2.new(0, 10, 0, 0)
         box.BackgroundTransparency = 1
         box.Text = serialize(initialValue)
         box.TextColor3 = C.text
         box.TextTransparency = 1
         box.Font = Enum.Font.Code
-        box.TextSize = 12
+        box.TextSize = 13
         box.TextXAlignment = Enum.TextXAlignment.Left
         box.ClearTextOnFocus = false
         box.ZIndex = 25
 
         local hl = Instance.new("TextLabel", boxWrap)
-        hl.Size = UDim2.new(1, -16, 1, 0)
-        hl.Position = UDim2.new(0, 8, 0, 0)
+        hl.Size = UDim2.new(1, -20, 1, 0)
+        hl.Position = UDim2.new(0, 10, 0, 0)
         hl.BackgroundTransparency = 1
         hl.RichText = true
         hl.Text = colorize(box.Text)
         hl.Font = Enum.Font.Code
-        hl.TextSize = 12
+        hl.TextSize = 13
         hl.TextXAlignment = Enum.TextXAlignment.Left
         hl.ZIndex = 24
 
@@ -1151,17 +1170,17 @@ local function openEditor(entry)
         card.BorderSizePixel = 0
         card.ZIndex = 204
         card.LayoutOrder = index
-        corner(card, 8)
-        pad(card, 10, 10, 12, 12)
-        vlist(card, 6)
+        corner(card, 9)
+        pad(card, 12, 12, 14, 14)
+        vlist(card, 8)
 
         local header = Instance.new("TextLabel", card)
-        header.Size = UDim2.new(1, 0, 0, 14)
+        header.Size = UDim2.new(1, 0, 0, 16)
         header.BackgroundTransparency = 1
         header.Text = "ARGUMENT #" .. index
         header.TextColor3 = C.accent
         header.Font = Enum.Font.GothamBold
-        header.TextSize = 10
+        header.TextSize = 11
         header.TextXAlignment = Enum.TextXAlignment.Left
         header.ZIndex = 205
         header.LayoutOrder = 1
@@ -1177,9 +1196,9 @@ local function openEditor(entry)
             sub.BorderSizePixel = 0
             sub.ZIndex = 205
             sub.LayoutOrder = 2
-            corner(sub, 7)
-            pad(sub, 8, 8, 10, 10)
-            vlist(sub, 6)
+            corner(sub, 8)
+            pad(sub, 10, 10, 12, 12)
+            vlist(sub, 8)
             local subTable = {}
             for _, k in ipairs(keys) do subTable[k] = value[k] end
             draft[index] = subTable
@@ -1204,29 +1223,29 @@ local function openEditor(entry)
     end
 
     local SaveBtn = Instance.new("TextButton", EditorWindow)
-    SaveBtn.Size = UDim2.new(0.5, -15, 0, 40)
-    SaveBtn.Position = UDim2.new(0, 10, 1, -50)
+    SaveBtn.Size = UDim2.new(0.5, -18, 0, 46)
+    SaveBtn.Position = UDim2.new(0, 12, 1, -58)
     SaveBtn.BackgroundColor3 = C.surface2
     SaveBtn.Text = "💾  Save rule"
     SaveBtn.TextColor3 = C.text
     SaveBtn.Font = Enum.Font.GothamBold
-    SaveBtn.TextSize = 12
+    SaveBtn.TextSize = 13
     SaveBtn.AutoButtonColor = false
     SaveBtn.ZIndex = 205
-    corner(SaveBtn, 8)
+    corner(SaveBtn, 10)
     stroke(SaveBtn, C.border, 1, 0.3)
 
     local ApplyBtn = Instance.new("TextButton", EditorWindow)
-    ApplyBtn.Size = UDim2.new(0.5, -15, 0, 40)
-    ApplyBtn.Position = UDim2.new(0.5, 5, 1, -50)
+    ApplyBtn.Size = UDim2.new(0.5, -18, 0, 46)
+    ApplyBtn.Position = UDim2.new(0.5, 6, 1, -58)
     ApplyBtn.BackgroundColor3 = C.accent
     ApplyBtn.Text = "⚡  Hook — apply always"
     ApplyBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
     ApplyBtn.Font = Enum.Font.GothamBold
-    ApplyBtn.TextSize = 12
+    ApplyBtn.TextSize = 13
     ApplyBtn.AutoButtonColor = false
     ApplyBtn.ZIndex = 205
-    corner(ApplyBtn, 8)
+    corner(ApplyBtn, 10)
 
     local function collectArgs()
         local out = {}
@@ -1258,7 +1277,7 @@ local function openEditor(entry)
 end
 
 --==============================================================
--- CONTEXT MENU
+-- CONTEXT MENU (компактное)
 --==============================================================
 local ContextMenu = nil
 local function destroyContextMenu()
@@ -1270,115 +1289,119 @@ local function openContextMenu(entry, mousePos)
     destroyContextMenu()
     ContextMenu = Instance.new("Frame", Main)
     ContextMenu.Name = "ContextMenu"
-    ContextMenu.Size = UDim2.new(0, 210, 0, 0)
+    ContextMenu.Size = UDim2.new(0, 170, 0, 0)
     ContextMenu.AutomaticSize = Enum.AutomaticSize.Y
     ContextMenu.BackgroundColor3 = C.surface2
     ContextMenu.BorderSizePixel = 0
-    ContextMenu.ZIndex = 300
-    corner(ContextMenu, 10)
+    ContextMenu.ZIndex = 400
+    corner(ContextMenu, 8)
     stroke(ContextMenu, C.borderLt, 1, 0.2)
 
     local ctxLayout = Instance.new("UIListLayout", ContextMenu)
-    ctxLayout.Padding = UDim.new(0, 2)
+    ctxLayout.Padding = UDim.new(0, 1)
     ctxLayout.SortOrder = Enum.SortOrder.LayoutOrder
-    pad(ContextMenu, 6, 6, 6, 6)
+    pad(ContextMenu, 4, 4, 4, 4)
 
     local header = Instance.new("TextLabel", ContextMenu)
-    header.Size = UDim2.new(1, 0, 0, 22)
+    header.Size = UDim2.new(1, 0, 0, 18)
     header.BackgroundTransparency = 1
     header.Text = entry.name
     header.TextColor3 = C.textDim
     header.Font = Enum.Font.GothamBold
-    header.TextSize = 10
+    header.TextSize = 9
     header.TextXAlignment = Enum.TextXAlignment.Left
     header.TextTruncate = Enum.TextTruncate.AtEnd
     header.LayoutOrder = 1
-    header.ZIndex = 302
+    header.ZIndex = 402
+    pad(header, 0, 0, 4, 4)
 
     local sep = Instance.new("Frame", ContextMenu)
     sep.Size = UDim2.new(1, 0, 0, 1)
     sep.BackgroundColor3 = C.border
     sep.BorderSizePixel = 0
     sep.LayoutOrder = 2
-    sep.ZIndex = 302
+    sep.ZIndex = 402
 
     local function mkItem(text, icon, color, order, onClick)
         local item = Instance.new("TextButton", ContextMenu)
-        item.Size = UDim2.new(1, 0, 0, 30)
+        item.Size = UDim2.new(1, 0, 0, 26)
         item.BackgroundColor3 = C.surface2
         item.Text = ""
         item.AutoButtonColor = false
         item.LayoutOrder = order
-        item.ZIndex = 302
-        corner(item, 6)
+        item.ZIndex = 402
+        corner(item, 5)
 
         local ic = Instance.new("TextLabel", item)
-        ic.Size = UDim2.new(0, 26, 1, 0)
+        ic.Size = UDim2.new(0, 22, 1, 0)
         ic.Position = UDim2.new(0, 4, 0, 0)
         ic.BackgroundTransparency = 1
         ic.Text = icon
         ic.TextColor3 = color
         ic.Font = Enum.Font.GothamBold
-        ic.TextSize = 13
-        ic.ZIndex = 303
+        ic.TextSize = 12
+        ic.ZIndex = 403
 
         local tx = Instance.new("TextLabel", item)
-        tx.Size = UDim2.new(1, -34, 1, 0)
-        tx.Position = UDim2.new(0, 32, 0, 0)
+        tx.Size = UDim2.new(1, -30, 1, 0)
+        tx.Position = UDim2.new(0, 28, 0, 0)
         tx.BackgroundTransparency = 1
         tx.Text = text
         tx.TextColor3 = C.text
         tx.Font = Enum.Font.GothamMedium
-        tx.TextSize = 12
+        tx.TextSize = 11
         tx.TextXAlignment = Enum.TextXAlignment.Left
-        tx.ZIndex = 303
+        tx.ZIndex = 403
 
         item.MouseEnter:Connect(function()
-            Tween:Create(item, TweenInfo.new(0.12), {BackgroundColor3 = C.surface3}):Play()
+            Tween:Create(item, TweenInfo.new(0.1), {BackgroundColor3 = C.surface3}):Play()
         end)
         item.MouseLeave:Connect(function()
-            Tween:Create(item, TweenInfo.new(0.12), {BackgroundColor3 = C.surface2}):Play()
+            Tween:Create(item, TweenInfo.new(0.1), {BackgroundColor3 = C.surface2}):Play()
         end)
         item.MouseButton1Click:Connect(function()
             onClick()
             destroyContextMenu()
         end)
+        return item
     end
 
     local order = 3
 
     if C.blocked[entry.name] then
-        mkItem("Unblock event", "🔓", C.good, order, function()
+        mkItem("Unblock", "🔓", C.good, order, function()
             C.blocked[entry.name] = nil
             refreshSettingsList()
+            -- Обновляем карточку на месте
+            local card = Scroll:FindFirstChild(entry.name .. "_CARD")
+            if card then card:Destroy() end
         end)
     else
-        mkItem("Block event", "🔒", C.bad, order, function()
+        mkItem("Block", "🔒", C.bad, order, function()
             C.blocked[entry.name] = true
             refreshSettingsList()
+            local card = Scroll:FindFirstChild(entry.name .. "_CARD")
+            if card then card:Destroy() end
         end)
     end
     order = order + 1
 
     if C.hidden[entry.name] then
-        mkItem("Unignore event", "👁", C.good, order, function()
+        mkItem("Unignore", "👁", C.good, order, function()
             C.hidden[entry.name] = nil
             refreshSettingsList()
         end)
     else
-        mkItem("Ignore event", "🚫", C.warn, order, function()
+        mkItem("Ignore", "🚫", C.warn, order, function()
             C.hidden[entry.name] = true
             refreshSettingsList()
-            for _, c in ipairs(Scroll:GetChildren()) do
-                if c:IsA("Frame") and c:GetAttribute("EventName") == entry.name then
-                    c:Destroy()
-                end
-            end
+            local card = Scroll:FindFirstChild(entry.name .. "_CARD")
+            if card then card:Destroy() end
         end)
     end
     order = order + 1
 
-    mkItem("Edit arguments", "✎", C.accent, order, function()
+    mkItem("Edit", "✎", C.accent, order, function()
         openEditor(entry)
     end)
     order = order + 1
@@ -1396,6 +1419,7 @@ local function openContextMenu(entry, mousePos)
     if my < 8 then my = 8 end
     ContextMenu.Position = UDim2.new(0, mx, 0, my)
 
+    -- Клик вне меню закрывает
     task.defer(function()
         local conn
         conn = UIS.InputBegan:Connect(function(input)
@@ -1410,21 +1434,29 @@ local function openContextMenu(entry, mousePos)
 end
 
 --==============================================================
--- EVENT CARD
+-- EVENT CARD (одна карточка на имя, со счётчиком)
 --==============================================================
+local eventCards = {}   -- [remoteName] = Card
+
 local function createEventCard(entry)
+    if eventCards[entry.name] then
+        return eventCards[entry.name]
+    end
+
     local Card = Instance.new("Frame", Scroll)
-    Card.Size = UDim2.new(1, -8, 0, 72)
+    Card.Name = entry.name .. "_CARD"
+    Card.Size = UDim2.new(1, -12, 0, 86)
     Card.BackgroundColor3 = C.surface2
     Card.BorderSizePixel = 0
     Card.ZIndex = 5
-    corner(Card, 9)
+    corner(Card, 10)
     Card:SetAttribute("EventName", entry.name)
+    eventCards[entry.name] = Card
 
     local CardStroke = stroke(Card, C.border, 1, 0.6)
 
     local Click = Instance.new("TextButton", Card)
-    Click.Size = UDim2.new(1, -44, 1, 0)
+    Click.Size = UDim2.new(1, -52, 1, 0)
     Click.BackgroundTransparency = 1
     Click.Text = ""
     Click.AutoButtonColor = false
@@ -1448,28 +1480,46 @@ local function createEventCard(entry)
     elseif C.hidden[entry.name] then DotColor = C.warn end
 
     local Dot = Instance.new("Frame", Card)
-    Dot.Size = UDim2.new(0, 8, 0, 8)
-    Dot.Position = UDim2.new(0, 14, 0, 17)
+    Dot.Size = UDim2.new(0, 9, 0, 9)
+    Dot.Position = UDim2.new(0, 16, 0, 20)
     Dot.BackgroundColor3 = DotColor
     Dot.BorderSizePixel = 0
     Dot.ZIndex = 7
     corner(Dot, 100)
 
     local NameLbl = Instance.new("TextLabel", Card)
-    NameLbl.Size = UDim2.new(1, -190, 0, 18)
-    NameLbl.Position = UDim2.new(0, 30, 0, 10)
+    NameLbl.Size = UDim2.new(1, -260, 0, 20)
+    NameLbl.Position = UDim2.new(0, 34, 0, 12)
     NameLbl.BackgroundTransparency = 1
     NameLbl.Text = entry.name
     NameLbl.TextColor3 = C.text
     NameLbl.Font = Enum.Font.GothamBold
-    NameLbl.TextSize = 12
+    NameLbl.TextSize = 13
     NameLbl.TextXAlignment = Enum.TextXAlignment.Left
     NameLbl.TextTruncate = Enum.TextTruncate.AtEnd
     NameLbl.ZIndex = 7
 
+    -- Счётчик вызовов (динамический)
+    local CountBadge = Instance.new("Frame", Card)
+    CountBadge.Size = UDim2.new(0, 52, 0, 20)
+    CountBadge.Position = UDim2.new(1, -196, 0, 12)
+    CountBadge.BackgroundColor3 = C.accent
+    CountBadge.BorderSizePixel = 0
+    CountBadge.ZIndex = 7
+    corner(CountBadge, 6)
+
+    local CountLbl = Instance.new("TextLabel", CountBadge)
+    CountLbl.Size = UDim2.new(1, 0, 1, 0)
+    CountLbl.BackgroundTransparency = 1
+    CountLbl.Text = "×1"
+    CountLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
+    CountLbl.Font = Enum.Font.GothamBold
+    CountLbl.TextSize = 11
+    CountLbl.ZIndex = 8
+
     local MethodBadge = Instance.new("Frame", Card)
-    MethodBadge.Size = UDim2.new(0, 84, 0, 18)
-    MethodBadge.Position = UDim2.new(1, -140, 0, 10)
+    MethodBadge.Size = UDim2.new(0, 88, 0, 20)
+    MethodBadge.Position = UDim2.new(1, -138, 0, 12)
     MethodBadge.BackgroundColor3 = Color3.fromRGB(30, 34, 48)
     MethodBadge.BorderSizePixel = 0
     MethodBadge.ZIndex = 7
@@ -1485,13 +1535,13 @@ local function createEventCard(entry)
     MethodLbl.ZIndex = 8
 
     local Preview = Instance.new("TextLabel", Card)
-    Preview.Size = UDim2.new(1, -50, 0, 24)
-    Preview.Position = UDim2.new(0, 30, 0, 34)
+    Preview.Size = UDim2.new(1, -60, 0, 30)
+    Preview.Position = UDim2.new(0, 34, 0, 40)
     Preview.BackgroundTransparency = 1
-    Preview.Text = shortPreview(entry.args, 100)
+    Preview.Text = shortPreview(entry.args, 120)
     Preview.TextColor3 = C.textMute
     Preview.Font = Enum.Font.Code
-    Preview.TextSize = 10
+    Preview.TextSize = 11
     Preview.TextXAlignment = Enum.TextXAlignment.Left
     Preview.TextTruncate = Enum.TextTruncate.AtEnd
     Preview.ZIndex = 7
@@ -1507,12 +1557,12 @@ local function createEventCard(entry)
     local bx = 1
     for _, b in ipairs(badges) do
         local RuleTag = Instance.new("Frame", Card)
-        RuleTag.Size = UDim2.new(0, 62, 0, 16)
-        RuleTag.Position = UDim2.new(1, -140 - (bx - 1) * 68, 0, 40)
+        RuleTag.Size = UDim2.new(0, 70, 0, 18)
+        RuleTag.Position = UDim2.new(1, -138 - (bx - 1) * 76, 0, 50)
         RuleTag.BackgroundColor3 = b.bg
         RuleTag.BorderSizePixel = 0
         RuleTag.ZIndex = 7
-        corner(RuleTag, 4)
+        corner(RuleTag, 5)
 
         local tagLbl = Instance.new("TextLabel", RuleTag)
         tagLbl.Size = UDim2.new(1, 0, 1, 0)
@@ -1520,27 +1570,45 @@ local function createEventCard(entry)
         tagLbl.Text = b.text
         tagLbl.TextColor3 = Color3.fromRGB(255, 255, 255)
         tagLbl.Font = Enum.Font.GothamBold
-        tagLbl.TextSize = 9
+        tagLbl.TextSize = 10
         tagLbl.ZIndex = 8
         bx = bx + 1
     end
 
     local HideBtn = Instance.new("TextButton", Card)
-    HideBtn.Size = UDim2.new(0, 26, 0, 26)
-    HideBtn.Position = UDim2.new(1, -36, 0, 9)
+    HideBtn.Size = UDim2.new(0, 30, 0, 30)
+    HideBtn.Position = UDim2.new(1, -42, 0, 11)
     HideBtn.BackgroundColor3 = Color3.fromRGB(52, 34, 42)
     HideBtn.Text = "✕"
     HideBtn.TextColor3 = Color3.fromRGB(255, 150, 150)
     HideBtn.Font = Enum.Font.GothamBold
-    HideBtn.TextSize = 11
+    HideBtn.TextSize = 12
     HideBtn.AutoButtonColor = false
     HideBtn.ZIndex = 10
     corner(HideBtn, 100)
     HideBtn.MouseButton1Click:Connect(function()
         C.hidden[entry.name] = true
         Card:Destroy()
+        eventCards[entry.name] = nil
         refreshSettingsList()
     end)
+
+    -- Сохраняем ссылки для обновления
+    Card:SetAttribute("CountLblPath", "x")
+    return Card
+end
+
+-- Функция обновления карточки (счётчик, время)
+local function updateEventCard(entry, card)
+    if not card or not card.Parent then return end
+    local badge = card:FindFirstChildWhichIsA("Frame", true)
+    -- Ищем CountLbl
+    for _, c in ipairs(card:GetDescendants()) do
+        if c:IsA("TextLabel") and c.Text:match("^×%d+") then
+            c.Text = "×" .. entry.count
+            break
+        end
+    end
 end
 
 --==============================================================
@@ -1556,54 +1624,54 @@ function refreshHooksList()
         any = true
         order = order + 1
         local Card = Instance.new("Frame", HooksScroll)
-        Card.Size = UDim2.new(1, -8, 0, 66)
+        Card.Size = UDim2.new(1, -8, 0, 76)
         Card.BackgroundColor3 = C.surface2
         Card.BorderSizePixel = 0
         Card.ZIndex = 5
         Card.LayoutOrder = order
-        corner(Card, 9)
+        corner(Card, 10)
         stroke(Card, rule.enabled and C.accent or C.border, 1, rule.enabled and 0.3 or 0.6)
 
         local ind = Instance.new("Frame", Card)
-        ind.Size = UDim2.new(0, 3, 1, -16)
-        ind.Position = UDim2.new(0, 8, 0, 8)
+        ind.Size = UDim2.new(0, 4, 1, -20)
+        ind.Position = UDim2.new(0, 10, 0, 10)
         ind.BackgroundColor3 = rule.enabled and C.good or Color3.fromRGB(70, 72, 84)
         ind.BorderSizePixel = 0
         ind.ZIndex = 6
         corner(ind, 100)
 
         local nameLbl = Instance.new("TextLabel", Card)
-        nameLbl.Size = UDim2.new(1, -190, 0, 18)
-        nameLbl.Position = UDim2.new(0, 20, 0, 8)
+        nameLbl.Size = UDim2.new(1, -220, 0, 20)
+        nameLbl.Position = UDim2.new(0, 24, 0, 10)
         nameLbl.BackgroundTransparency = 1
         nameLbl.Text = name
         nameLbl.TextColor3 = rule.enabled and C.text or C.textDim
         nameLbl.Font = Enum.Font.GothamBold
-        nameLbl.TextSize = 12
+        nameLbl.TextSize = 13
         nameLbl.TextXAlignment = Enum.TextXAlignment.Left
         nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
         nameLbl.ZIndex = 6
 
         local preview = Instance.new("TextLabel", Card)
-        preview.Size = UDim2.new(1, -190, 0, 24)
-        preview.Position = UDim2.new(0, 20, 0, 32)
+        preview.Size = UDim2.new(1, -220, 0, 30)
+        preview.Position = UDim2.new(0, 24, 0, 38)
         preview.BackgroundTransparency = 1
-        preview.Text = shortPreview(rule.args, 80)
+        preview.Text = shortPreview(rule.args, 90)
         preview.TextColor3 = C.textMute
         preview.Font = Enum.Font.Code
-        preview.TextSize = 10
+        preview.TextSize = 11
         preview.TextXAlignment = Enum.TextXAlignment.Left
         preview.TextTruncate = Enum.TextTruncate.AtEnd
         preview.ZIndex = 6
 
         local Toggle = Instance.new("TextButton", Card)
-        Toggle.Size = UDim2.new(0, 52, 0, 26)
-        Toggle.Position = UDim2.new(1, -142, 0, 10)
+        Toggle.Size = UDim2.new(0, 60, 0, 30)
+        Toggle.Position = UDim2.new(1, -160, 0, 12)
         Toggle.BackgroundColor3 = rule.enabled and C.accent or Color3.fromRGB(60, 62, 76)
         Toggle.Text = rule.enabled and "ON" or "OFF"
         Toggle.TextColor3 = Color3.fromRGB(255, 255, 255)
         Toggle.Font = Enum.Font.GothamBold
-        Toggle.TextSize = 10
+        Toggle.TextSize = 11
         Toggle.AutoButtonColor = false
         Toggle.ZIndex = 8
         corner(Toggle, 100)
@@ -1614,13 +1682,13 @@ function refreshHooksList()
         end)
 
         local Del = Instance.new("TextButton", Card)
-        Del.Size = UDim2.new(0, 30, 0, 30)
-        Del.Position = UDim2.new(1, -40, 0.5, -15)
+        Del.Size = UDim2.new(0, 34, 0, 34)
+        Del.Position = UDim2.new(1, -46, 0.5, -17)
         Del.BackgroundColor3 = Color3.fromRGB(52, 34, 42)
         Del.Text = "✕"
         Del.TextColor3 = Color3.fromRGB(255, 150, 150)
         Del.Font = Enum.Font.GothamBold
-        Del.TextSize = 11
+        Del.TextSize = 12
         Del.AutoButtonColor = false
         Del.ZIndex = 8
         corner(Del, 100)
@@ -1643,15 +1711,14 @@ function refreshSettingsList()
     end
     local order = 0
 
-    -- BLOCKED
     order = order + 1
     local bH = Instance.new("TextLabel", SettingsScroll)
-    bH.Size = UDim2.new(1, -8, 0, 24)
+    bH.Size = UDim2.new(1, -8, 0, 28)
     bH.BackgroundTransparency = 1
     bH.Text = "🔒  BLOCKED EVENTS"
     bH.TextColor3 = C.bad
     bH.Font = Enum.Font.GothamBold
-    bH.TextSize = 11
+    bH.TextSize = 12
     bH.TextXAlignment = Enum.TextXAlignment.Left
     bH.LayoutOrder = order
     bH.ZIndex = 6
@@ -1662,37 +1729,37 @@ function refreshSettingsList()
         blockCount = blockCount + 1
         order = order + 1
         local Card = Instance.new("Frame", SettingsScroll)
-        Card.Size = UDim2.new(1, -8, 0, 44)
+        Card.Size = UDim2.new(1, -8, 0, 50)
         Card.BackgroundColor3 = C.surface2
         Card.BorderSizePixel = 0
         Card.ZIndex = 5
         Card.LayoutOrder = order
-        corner(Card, 8)
+        corner(Card, 9)
         stroke(Card, C.bad, 1, 0.6)
 
         local nameLbl = Instance.new("TextLabel", Card)
-        nameLbl.Size = UDim2.new(1, -80, 1, 0)
-        nameLbl.Position = UDim2.new(0, 14, 0, 0)
+        nameLbl.Size = UDim2.new(1, -100, 1, 0)
+        nameLbl.Position = UDim2.new(0, 16, 0, 0)
         nameLbl.BackgroundTransparency = 1
         nameLbl.Text = name
         nameLbl.TextColor3 = C.text
         nameLbl.Font = Enum.Font.GothamBold
-        nameLbl.TextSize = 12
+        nameLbl.TextSize = 13
         nameLbl.TextXAlignment = Enum.TextXAlignment.Left
         nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
         nameLbl.ZIndex = 6
 
         local RemoveBtn = Instance.new("TextButton", Card)
-        RemoveBtn.Size = UDim2.new(0, 60, 0, 28)
-        RemoveBtn.Position = UDim2.new(1, -70, 0.5, -14)
+        RemoveBtn.Size = UDim2.new(0, 76, 0, 32)
+        RemoveBtn.Position = UDim2.new(1, -88, 0.5, -16)
         RemoveBtn.BackgroundColor3 = Color3.fromRGB(52, 34, 42)
         RemoveBtn.Text = "Remove"
         RemoveBtn.TextColor3 = Color3.fromRGB(255, 155, 160)
         RemoveBtn.Font = Enum.Font.GothamBold
-        RemoveBtn.TextSize = 10
+        RemoveBtn.TextSize = 11
         RemoveBtn.AutoButtonColor = false
         RemoveBtn.ZIndex = 7
-        corner(RemoveBtn, 6)
+        corner(RemoveBtn, 7)
         RemoveBtn.MouseButton1Click:Connect(function()
             C.blocked[name] = nil
             refreshSettingsList()
@@ -1701,27 +1768,26 @@ function refreshSettingsList()
     if blockCount == 0 then
         order = order + 1
         local empty = Instance.new("TextLabel", SettingsScroll)
-        empty.Size = UDim2.new(1, -8, 0, 26)
+        empty.Size = UDim2.new(1, -8, 0, 30)
         empty.BackgroundTransparency = 1
         empty.Text = "No blocked events"
         empty.TextColor3 = C.textMute
         empty.Font = Enum.Font.Gotham
-        empty.TextSize = 11
+        empty.TextSize = 12
         empty.TextXAlignment = Enum.TextXAlignment.Left
         empty.LayoutOrder = order
         empty.ZIndex = 6
         pad(empty, 0, 0, 14, 0)
     end
 
-    -- IGNORED
     order = order + 1
     local iH = Instance.new("TextLabel", SettingsScroll)
-    iH.Size = UDim2.new(1, -8, 0, 24)
+    iH.Size = UDim2.new(1, -8, 0, 28)
     iH.BackgroundTransparency = 1
     iH.Text = "🚫  IGNORED EVENTS"
     iH.TextColor3 = C.warn
     iH.Font = Enum.Font.GothamBold
-    iH.TextSize = 11
+    iH.TextSize = 12
     iH.TextXAlignment = Enum.TextXAlignment.Left
     iH.LayoutOrder = order
     iH.ZIndex = 6
@@ -1732,37 +1798,37 @@ function refreshSettingsList()
         ignoreCount = ignoreCount + 1
         order = order + 1
         local Card = Instance.new("Frame", SettingsScroll)
-        Card.Size = UDim2.new(1, -8, 0, 44)
+        Card.Size = UDim2.new(1, -8, 0, 50)
         Card.BackgroundColor3 = C.surface2
         Card.BorderSizePixel = 0
         Card.ZIndex = 5
         Card.LayoutOrder = order
-        corner(Card, 8)
+        corner(Card, 9)
         stroke(Card, C.warn, 1, 0.6)
 
         local nameLbl = Instance.new("TextLabel", Card)
-        nameLbl.Size = UDim2.new(1, -80, 1, 0)
-        nameLbl.Position = UDim2.new(0, 14, 0, 0)
+        nameLbl.Size = UDim2.new(1, -100, 1, 0)
+        nameLbl.Position = UDim2.new(0, 16, 0, 0)
         nameLbl.BackgroundTransparency = 1
         nameLbl.Text = name
         nameLbl.TextColor3 = C.text
         nameLbl.Font = Enum.Font.GothamBold
-        nameLbl.TextSize = 12
+        nameLbl.TextSize = 13
         nameLbl.TextXAlignment = Enum.TextXAlignment.Left
         nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
         nameLbl.ZIndex = 6
 
         local RemoveBtn = Instance.new("TextButton", Card)
-        RemoveBtn.Size = UDim2.new(0, 60, 0, 28)
-        RemoveBtn.Position = UDim2.new(1, -70, 0.5, -14)
+        RemoveBtn.Size = UDim2.new(0, 76, 0, 32)
+        RemoveBtn.Position = UDim2.new(1, -88, 0.5, -16)
         RemoveBtn.BackgroundColor3 = Color3.fromRGB(58, 48, 34)
         RemoveBtn.Text = "Remove"
         RemoveBtn.TextColor3 = Color3.fromRGB(255, 200, 120)
         RemoveBtn.Font = Enum.Font.GothamBold
-        RemoveBtn.TextSize = 10
+        RemoveBtn.TextSize = 11
         RemoveBtn.AutoButtonColor = false
         RemoveBtn.ZIndex = 7
-        corner(RemoveBtn, 6)
+        corner(RemoveBtn, 7)
         RemoveBtn.MouseButton1Click:Connect(function()
             C.hidden[name] = nil
             refreshSettingsList()
@@ -1771,12 +1837,12 @@ function refreshSettingsList()
     if ignoreCount == 0 then
         order = order + 1
         local empty = Instance.new("TextLabel", SettingsScroll)
-        empty.Size = UDim2.new(1, -8, 0, 26)
+        empty.Size = UDim2.new(1, -8, 0, 30)
         empty.BackgroundTransparency = 1
         empty.Text = "No ignored events"
         empty.TextColor3 = C.textMute
         empty.Font = Enum.Font.Gotham
-        empty.TextSize = 11
+        empty.TextSize = 12
         empty.TextXAlignment = Enum.TextXAlignment.Left
         empty.LayoutOrder = order
         empty.ZIndex = 6
@@ -1795,13 +1861,13 @@ function refreshScannerList()
     local allRemotes = getAllRemotes()
 
     local stats = Instance.new("TextLabel", ScannerScroll)
-    stats.Size = UDim2.new(1, -8, 0, 40)
+    stats.Size = UDim2.new(1, -8, 0, 44)
     stats.BackgroundTransparency = 1
-    stats.Text = "Найдено ремоутов: " .. tostring(#allRemotes)
-        .. "\nВсе они логируются в Events при вызове"
+    stats.Text = "Found remotes: " .. tostring(#allRemotes)
+        .. "\nThey all get logged into Events when called"
     stats.TextColor3 = C.textDim
     stats.Font = Enum.Font.Gotham
-    stats.TextSize = 11
+    stats.TextSize = 12
     stats.TextXAlignment = Enum.TextXAlignment.Left
     stats.TextWrapped = true
     stats.LayoutOrder = 0
@@ -1828,22 +1894,22 @@ function refreshScannerList()
         local data = seen[name]
 
         local Card = Instance.new("Frame", ScannerScroll)
-        Card.Size = UDim2.new(1, -8, 0, 60)
+        Card.Size = UDim2.new(1, -8, 0, 66)
         Card.BackgroundColor3 = C.surface2
         Card.BorderSizePixel = 0
         Card.ZIndex = 5
         Card.LayoutOrder = order
-        corner(Card, 8)
+        corner(Card, 9)
         stroke(Card, C.border, 1, 0.6)
 
         local nameLbl = Instance.new("TextLabel", Card)
-        nameLbl.Size = UDim2.new(1, -80, 0, 20)
-        nameLbl.Position = UDim2.new(0, 14, 0, 8)
+        nameLbl.Size = UDim2.new(1, -100, 0, 22)
+        nameLbl.Position = UDim2.new(0, 16, 0, 10)
         nameLbl.BackgroundTransparency = 1
         nameLbl.Text = name
         nameLbl.TextColor3 = C.text
         nameLbl.Font = Enum.Font.GothamBold
-        nameLbl.TextSize = 12
+        nameLbl.TextSize = 13
         nameLbl.TextXAlignment = Enum.TextXAlignment.Left
         nameLbl.TextTruncate = Enum.TextTruncate.AtEnd
         nameLbl.ZIndex = 6
@@ -1852,28 +1918,28 @@ function refreshScannerList()
         for c in pairs(data.classes) do table.insert(classes, c) end
 
         local infoLbl = Instance.new("TextLabel", Card)
-        infoLbl.Size = UDim2.new(1, -80, 0, 26)
-        infoLbl.Position = UDim2.new(0, 14, 0, 28)
+        infoLbl.Size = UDim2.new(1, -100, 0, 26)
+        infoLbl.Position = UDim2.new(0, 16, 0, 32)
         infoLbl.BackgroundTransparency = 1
         infoLbl.Text = table.concat(classes, ", ") .. "  •  " .. data.count .. " шт."
         infoLbl.TextColor3 = C.textMute
         infoLbl.Font = Enum.Font.Code
-        infoLbl.TextSize = 10
+        infoLbl.TextSize = 11
         infoLbl.TextXAlignment = Enum.TextXAlignment.Left
         infoLbl.TextTruncate = Enum.TextTruncate.AtEnd
         infoLbl.ZIndex = 6
 
         local blockBtn = Instance.new("TextButton", Card)
-        blockBtn.Size = UDim2.new(0, 60, 0, 28)
-        blockBtn.Position = UDim2.new(1, -70, 0.5, -14)
+        blockBtn.Size = UDim2.new(0, 76, 0, 32)
+        blockBtn.Position = UDim2.new(1, -88, 0.5, -16)
         blockBtn.BackgroundColor3 = C.blocked[name] and Color3.fromRGB(52, 34, 42) or C.surface3
         blockBtn.Text = C.blocked[name] and "Unblock" or "Block"
         blockBtn.TextColor3 = C.blocked[name] and Color3.fromRGB(255, 155, 160) or C.text
         blockBtn.Font = Enum.Font.GothamBold
-        blockBtn.TextSize = 10
+        blockBtn.TextSize = 11
         blockBtn.AutoButtonColor = false
         blockBtn.ZIndex = 7
-        corner(blockBtn, 6)
+        corner(blockBtn, 7)
         blockBtn.MouseButton1Click:Connect(function()
             if C.blocked[name] then
                 C.blocked[name] = nil
@@ -1891,27 +1957,47 @@ RescanBtn.MouseButton1Click:Connect(function()
 end)
 
 --==============================================================
--- RENDER LOOP
+-- RENDER LOOP — обновление счётчиков
 --==============================================================
-local renderedKeys = {}
 ClearBtn.MouseButton1Click:Connect(function()
     EventLog = {}
-    renderedKeys = {}
-    for _, c in ipairs(Scroll:GetChildren()) do
-        if c:IsA("Frame") then c:Destroy() end
+    EventOrder = {}
+    for name, card in pairs(eventCards) do
+        if card then card:Destroy() end
     end
+    eventCards = {}
 end)
 
 task.spawn(function()
     while ScreenGui.Parent do
-        for _, entry in ipairs(EventLog) do
-            local key = entry.time .. "_" .. entry.name
-            if not renderedKeys[key] then
-                renderedKeys[key] = true
-                createEventCard(entry)
+        for _, name in ipairs(EventOrder) do
+            local entry = EventLog[name]
+            if entry and not C.hidden[name] then
+                local card = eventCards[name]
+                if not card or not card.Parent then
+                    -- Удалена вручную или новая
+                    eventCards[name] = nil
+                    card = createEventCard(entry)
+                end
+                -- Обновляем счётчик
+                if card then
+                    for _, c in ipairs(card:GetDescendants()) do
+                        if c:IsA("TextLabel") and c.Text:match("^×%d+") then
+                            c.Text = "×" .. entry.count
+                            break
+                        end
+                    end
+                    -- Обновляем превью (аргументы последнего вызова)
+                    for _, c in ipairs(card:GetDescendants()) do
+                        if c:IsA("TextLabel") and c.Text:match("^%{") then
+                            c.Text = shortPreview(entry.args, 120)
+                            break
+                        end
+                    end
+                end
             end
         end
-        task.wait(0.25)
+        task.wait(0.4)
     end
 end)
 
