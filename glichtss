@@ -4,6 +4,14 @@ local Players = game:GetService("Players")
 local TweenService = game:GetService("TweenService")
 local UserInputService = game:GetService("UserInputService")
 
+-- ✅ ID места, где скрипт должен работать (Doors)
+local ALLOWED_PLACE_ID = 6839171747
+
+-- Если мы не в нужной игре — выходим
+if game.PlaceId ~= ALLOWED_PLACE_ID then
+    return
+end
+
 local player = Players.LocalPlayer
 
 -- Функция получения Glitch Level
