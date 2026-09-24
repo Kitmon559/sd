@@ -1,0 +1,679 @@
+--!nocheck
+-- ModHooker v4 — редактор модулей с подсветкой и редактированием
+-- G — открыть/закрыть | Двигать за шапку | Ресайз за угол
+
+local Players = game:GetService("Players")
+local UIS = game:GetService("UserInputService")
+
+local player = Players.LocalPlayer
+local gui = player:WaitForChild("PlayerGui")
+
+-- ============================================================
+--  ЦВЕТА ТЕМЫ
+-- ============================================================
+local THEME = {
+    bg       = Color3.fromRGB(24, 24, 30),
+    panel    = Color3.fromRGB(30, 30, 38),
+    panelAlt = Color3.fromRGB(36, 36, 46),
+    border   = Color3.fromRGB(60, 60, 80),
+    header   = Color3.fromRGB(38, 38, 52),
+    text     = Color3.fromRGB(220, 220, 230),
+    textDim  = Color3.fromRGB(140, 140, 160),
+    key      = Color3.fromRGB(180, 180, 230),
+    key2     = Color3.fromRGB(140, 200, 255),
+    string   = Color3.fromRGB(180, 230, 160),
+    number   = Color3.fromRGB(255, 200, 120),
+    bool     = Color3.fromRGB(255, 140, 180),
+    color    = Color3.fromRGB(200, 160, 255),
+    op       = Color3.fromRGB(200, 200, 220),
+    comment  = Color3.fromRGB(120, 120, 140),
+    accent   = Color3.fromRGB(90, 140, 220),
+    good     = Color3.fromRGB(90, 200, 120),
+    bad      = Color3.fromRGB(230, 100, 100),
+    warn     = Color3.fromRGB(240, 180, 80),
+}
+
+-- ============================================================
+--  УТИЛИТЫ
+-- ============================================================
+local function resolvePath(path)
+    path = path:gsub('game:GetService%s*%(%s*["\']([%w_]+)["\']%s*%)', 'game.%1')
+    path = path:gsub("^game%.", "")
+
+    local current = game
+    for part in path:gmatch("[^%.]+") do
+        local name, idx = part:match("^([%w_]+)%[(%d+)%]$")
+        if name then
+            if current == nil then return nil, "обрыв на " .. name end
+            current = current[name]
+            if current == nil then return nil, "нет поля " .. name end
+            current = current[tonumber(idx)]
+        else
+            if current == nil then return nil, "обрыв на " .. part end
+            local ok, next_ = pcall(function() return current[part] end)
+            if not ok or next_ == nil then
+                if typeof(current) == "Instance" then
+                    local found = current:FindFirstChild(part)
+                    if found then next_ = found else return nil, "нет поля " .. part end
+                else
+                    return nil, "нет поля " .. part
+                end
+            end
+            current = next_
+        end
+    end
+    return current
+end
+
+local function pretty(v, indent, seen)
+    indent = indent or 0
+    seen = seen or {}
+    local pad = string.rep("  ", indent)
+    local t = typeof(v)
+    if t == "Instance" then
+        return v:GetFullName()
+    elseif t == "Color3" then
+        return string.format("Color3.fromRGB(%d, %d, %d)", v.R*255, v.G*255, v.B*255)
+    elseif t == "Vector3" then
+        return string.format("Vector3.new(%g, %g, %g)", v.X, v.Y, v.Z)
+    elseif t == "UDim2" then
+        return string.format("UDim2.new(%g, %d, %g, %d)", v.X.Scale, v.X.Offset, v.Y.Scale, v.Y.Offset)
+    elseif t == "EnumItem" then
+        return tostring(v)
+    elseif t == "table" then
+        if seen[v] then return "<cycle>" end
+        seen[v] = true
+        local parts = {}
+        for k, val in pairs(v) do
+            local key = (type(k) == "string" and k:match("^[%a_][%w_]*$")) and k or ("[" .. tostring(k) .. "]")
+            table.insert(parts, pad .. "  " .. key .. " = " .. pretty(val, indent + 1, seen))
+        end
+        seen[v] = nil
+        if #parts == 0 then return "{}" end
+        return "{\n" .. table.concat(parts, ",\n") .. "\n" .. pad .. "}"
+    elseif t == "string" then
+        return string.format("%q", v)
+    else
+        return tostring(v)
+    end
+end
+
+-- ============================================================
+--  РУЧНОЙ ПАРСЕР ЗНАЧЕНИЙ (без loadstring)
+-- ============================================================
+local function parseValue(str)
+    if type(str) ~= "string" then return nil, "не строка" end
+    str = str:gsub("^%s+", ""):gsub("%s+$", "")
+    str = str:gsub(",%s*$", "")
+
+    if str == "nil" then return nil end
+
+    -- строка
+    local s = str:match('^"(.*)"$') or str:match("^'(.*)'$")
+    if s then
+        -- unescape
+        s = s:gsub('\\"', '"'):gsub("\\'", "'"):gsub("\\n", "\n"):gsub("\\\\", "\\")
+        return s
+    end
+
+    -- bool
+    if str == "true" then return true end
+    if str == "false" then return false end
+
+    -- число
+    local n = tonumber(str)
+    if n then return n end
+
+    -- Color3.fromRGB(r,g,b)
+    do
+        local r, g, b = str:match("Color3%.fromRGB%s*%(%s*(%d+)%s*,%s*(%d+)%s*,%s*(%d+)%s*%)")
+        if r then return Color3.fromRGB(tonumber(r), tonumber(g), tonumber(b)) end
+    end
+
+    -- Color3.new(r,g,b)
+    do
+        local r, g, b = str:match("Color3%.new%s*%(%s*([%d%.]+)%s*,%s*([%d%.]+)%s*,%s*([%d%.]+)%s*%)")
+        if r then return Color3.new(tonumber(r), tonumber(g), tonumber(b)) end
+    end
+
+    -- Vector3.new(x,y,z)
+    do
+        local x, y, z = str:match("Vector3%.new%s*%(%s*([%-%d%.eE]+)%s*,%s*([%-%d%.eE]+)%s*,%s*([%-%d%.eE]+)%s*%)")
+        if x then return Vector3.new(tonumber(x), tonumber(y), tonumber(z)) end
+    end
+
+    -- UDim2.new(xs,xo,ys,yo)
+    do
+        local xs, xo, ys, yo = str:match("UDim2%.new%s*%(%s*([%-%d%.]+)%s*,%s*([%-%d]+)%s*,%s*([%-%d%.]+)%s*,%s*([%-%d]+)%s*%)")
+        if xs then
+            return UDim2.new(tonumber(xs), tonumber(xo), tonumber(ys), tonumber(yo))
+        end
+    end
+
+    -- Enum.X.Y
+    do
+        local a, b = str:match("Enum%.([%w_]+)%.([%w_]+)")
+        if a then
+            local ok, item = pcall(function() return Enum[a][b] end)
+            if ok then return item end
+        end
+    end
+
+    return nil, "неизвестный тип: " .. str
+end
+
+-- Установка значения по пути
+local function setByPath(root, path, value)
+    local parts = {}
+    for part in path:gmatch("[^%.]+") do
+        local name, idx = part:match("^([%w_]+)%[(%d+)%]$")
+        if name then
+            table.insert(parts, name)
+            table.insert(parts, tonumber(idx))
+        else
+            table.insert(parts, part)
+        end
+    end
+
+    local cur = root
+    for i = 1, #parts - 1 do
+        if cur == nil then return false, "обрыв на " .. tostring(parts[i]) end
+        cur = cur[parts[i]]
+    end
+    if cur == nil then return false, "не найдено" end
+    cur[parts[#parts]] = value
+    return true
+end
+
+-- ============================================================
+--  ПОДСВЕТКА СИНТАКСИСА
+-- ============================================================
+local function highlightLua(code)
+    local out = {}
+    local i = 1
+    local n = #code
+
+    local function esc(s)
+        return s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;")
+    end
+    local function push(text, color)
+        table.insert(out, string.format('<font color="rgb(%d,%d,%d)">%s</font>',
+            color.R*255, color.G*255, color.B*255, esc(text)))
+    end
+
+    while i <= n do
+        local c = code:sub(i, i)
+        local rest = code:sub(i)
+
+        local cmt = rest:match("^(%-%-[^\n]*)")
+        if cmt then push(cmt, THEME.comment); i = i + #cmt
+        elseif c == '"' or c == "'" then
+            local str = rest:match('^' .. c .. '([^' .. c .. '\\]*)' .. c)
+            if str then
+                push(c .. str .. c, THEME.string)
+                i = i + #str + 2
+            else
+                push(c, THEME.op); i = i + 1
+            end
+        elseif c:match("%d") then
+            local num = rest:match("^[%d%.]+")
+            push(num, THEME.number); i = i + #num
+        elseif c:match("[%a_]") then
+            local word = rest:match("^[%w_]+")
+            local after = rest:sub(#word + 1, #word + 1)
+            if word == "true" or word == "false" or word == "nil" then
+                push(word, THEME.bool)
+            elseif word == "Color3" or word == "Vector3" or word == "UDim2" or word == "Enum" then
+                push(word, THEME.color)
+            elseif after == "." then
+                push(word, THEME.key)
+            else
+                push(word, THEME.key2)
+            end
+            i = i + #word
+        else
+            push(c, THEME.op); i = i + 1
+        end
+    end
+    return table.concat(annoys, "")
+end
+-- fix опечатки
+local function highlightLuaFixed(code)
+    local out = {}
+    local i = 1
+    local n = #code
+    local function esc(s) return s:gsub("&", "&amp;"):gsub("<", "&lt;"):gsub(">", "&gt;") end
+    local function push(text, color)
+        table.insert(out, string.format('<font color="rgb(%d,%d,%d)">%s</font>',
+            color.R*255, color.G*255, color.B*255, esc(text)))
+    end
+    while i <= n do
+        local c = code:sub(i, i)
+        local rest = code:sub(i)
+        local cmt = rest:match("^(%-%-[^\n]*)")
+        if cmt then push(cmt, THEME.comment); i = i + #cmt
+        elseif c == '"' or c == "'" then
+            local str = rest:match('^' .. c .. '([^' .. c .. '\\]*)' .. c)
+            if str then push(c .. str .. c, THEME.string); i = i + #str + 2
+            else push(c, THEME.op); i = i + 1 end
+        elseif c:match("%d") then
+            local num = rest:match("^[%d%.]+")
+            push(num, THEME.number); i = i + #num
+        elseif c:match("[%a_]") then
+            local word = rest:match("^[%w_]+")
+            local after = rest:sub(#word + 1, #word + 1)
+            if word == "true" or word == "false" or word == "nil" then push(word, THEME.bool)
+            elseif word == "Color3" or word == "Vector3" or word == "UDim2" or word == "Enum" then push(word, THEME.color)
+            elseif after == "." then push(word, THEME.key)
+            else push(word, THEME.key2) end
+            i = i + #word
+        else
+            push(c, THEME.op); i = i + 1
+        end
+    end
+    return table.concat(out, "")
+end
+
+-- ============================================================
+--  GUI
+-- ============================================================
+local screen = Instance.new("ScreenGui")
+screen.Name = "ModHookerGUI"
+screen.ResetOnSpawn = false
+screen.ZIndexBehavior = Enum.ZIndexBehavior.Sibling
+screen.Parent = gui
+
+-- ГЛАВНОЕ ОКНО
+local main = Instance.new("Frame")
+main.Size = UDim2.new(0, 480, 0, 360)
+main.Position = UDim2.new(0.5, -240, 0.5, -180)
+main.BackgroundColor3 = THEME.bg
+main.BorderSizePixel = 0
+main.Active = true
+main.Draggable = true
+main.Parent = screen
+Instance.new("UICorner", main).CornerRadius = UDim.new(0, 10)
+local mstr = Instance.new("UIStroke", main); mstr.Color = THEME.border; mstr.Thickness = 1.5
+
+local function makeHeader(parent, text, onClose)
+    local h = Instance.new("Frame")
+    h.Size = UDim2.new(1, 0, 0, 36)
+    h.BackgroundColor3 = THEME.header
+    h.BorderSizePixel = 0
+    h.Parent = parent
+    Instance.new("UICorner", h).CornerRadius = UDim.new(0, 10)
+    local fix = Instance.new("Frame")
+    fix.Size = UDim2.new(1, 0, 0, 12); fix.Position = UDim2.new(0, 0, 1, -12)
+    fix.BackgroundColor3 = h.BackgroundColor3; fix.BorderSizePixel = 0; fix.Parent = h
+
+    local lbl = Instance.new("TextLabel")
+    lbl.Size = UDim2.new(1, -100, 1, 0); lbl.Position = UDim2.new(0, 12, 0, 0)
+    lbl.BackgroundTransparency = 1; lbl.Text = text
+    lbl.TextColor3 = THEME.text; lbl.TextXAlignment = Enum.TextXAlignment.Left
+    lbl.Font = Enum.Font.GothamBold; lbl.TextSize = 14; lbl.Parent = h
+
+    if onClose then
+        local btn = Instance.new("TextButton")
+        btn.Size = UDim2.new(0, 28, 0, 24); btn.Position = UDim2.new(1, -36, 0, 6)
+        btn.BackgroundColor3 = Color3.fromRGB(70, 45, 55)
+        btn.Text = "✕"; btn.TextColor3 = Color3.fromRGB(255, 180, 180)
+        btn.Font = Enum.Font.GothamBold; btn.TextSize = 14; btn.BorderSizePixel = 0
+        btn.Parent = h
+        Instance.new("UICorner", btn).CornerRadius = UDim.new(0, 6)
+        btn.MouseButton1Click:Connect(onClose)
+        return h, btn
+    end
+    return h
+end
+
+local _, closeBtn = makeHeader(main, "🛠 Mod Hooker v4", function()
+    main.Visible = false
+end)
+
+local pathLbl = Instance.new("TextLabel")
+pathLbl.Size = UDim2.new(1, -24, 0, 16); pathLbl.Position = UDim2.new(0, 12, 0, 46)
+pathLbl.BackgroundTransparency = 1; pathLbl.Text = "📁 Путь:"
+pathLbl.TextColor3 = THEME.textDim; pathLbl.TextXAlignment = Enum.TextXAlignment.Left
+pathLbl.Font = Enum.Font.Gotham; pathLbl.TextSize = 12; pathLbl.Parent = main
+
+local pathBox = Instance.new("TextBox")
+pathBox.Size = UDim2.new(1, -24, 0, 32); pathBox.Position = UDim2.new(0, 12, 0, 64)
+pathBox.BackgroundColor3 = THEME.panelAlt; pathBox.BorderSizePixel = 0
+pathBox.Text = 'game:GetService("ReplicatedStorage").Modifiers'
+pathBox.TextColor3 = THEME.text; pathBox.Font = Enum.Font.Code
+pathBox.TextSize = 13; pathBox.TextXAlignment = Enum.TextXAlignment.Left
+pathBox.ClearTextOnFocus = false; pathBox.Parent = main
+Instance.new("UICorner", pathBox).CornerRadius = UDim.new(0, 6)
+local p1 = Instance.new("UIPadding", pathBox); p1.PaddingLeft = UDim.new(0, 8); p1.PaddingRight = UDim.new(0, 8)
+
+local viewBtn = Instance.new("TextButton")
+viewBtn.Size = UDim2.new(1, -24, 0, 36); viewBtn.Position = UDim2.new(0, 12, 0, 106)
+viewBtn.BackgroundColor3 = THEME.accent
+viewBtn.Text = "🔍 Просмотреть содержимое"
+viewBtn.TextColor3 = Color3.fromRGB(255, 255, 255)
+viewBtn.Font = Enum.Font.GothamBold; viewBtn.TextSize = 14
+viewBtn.BorderSizePixel = 0; viewBtn.Parent = main
+Instance.new("UICorner", viewBtn).CornerRadius = UDim.new(0, 6)
+
+local logFrame = Instance.new("ScrollingFrame")
+logFrame.Size = UDim2.new(1, -24, 1, -170); logFrame.Position = UDim2.new(0, 12, 0, 152)
+logFrame.BackgroundColor3 = Color3.fromRGB(16, 16, 20); logFrame.BorderSizePixel = 0
+logFrame.ScrollBarThickness = 4; logFrame.CanvasSize = UDim2.new(0, 0, 0, 0)
+logFrame.AutomaticCanvasSize = Enum.AutomaticSize.Y; logFrame.Parent = main
+Instance.new("UICorner", logFrame).CornerRadius = UDim.new(0, 6)
+local lLay = Instance.new("UIListLayout", logFrame); lLay.Padding = UDim.new(0, 4)
+local lPad = Instance.new("UIPadding", logFrame)
+lPad.PaddingTop = UDim.new(0, 6); lPad.PaddingLeft = UDim.new(0, 8)
+lPad.PaddingRight = UDim.new(0, 8); lPad.PaddingBottom = UDim.new(0, 6)
+
+local function log(msg, color)
+    local l = Instance.new("TextLabel")
+    l.Size = UDim2.new(1, 0, 0, 0); l.AutomaticSize = Enum.AutomaticSize.Y
+    l.BackgroundTransparency = 1; l.Text = "› " .. msg
+    l.TextColor3 = color or THEME.text
+    l.TextXAlignment = Enum.TextXAlignment.Left; l.TextWrapped = true
+    l.Font = Enum.Font.Code; l.TextSize = 12; l.Parent = logFrame
+end
+
+local resizer = Instance.new("TextButton")
+resizer.Size = UDim2.new(0, 14, 0, 14); resizer.Position = UDim2.new(1, -18, 1, -18)
+resizer.BackgroundColor3 = THEME.border; resizer.Text = ""; resizer.BorderSizePixel = 0
+resizer.Parent = main
+Instance.new("UICorner", resizer).CornerRadius = UDim.new(0, 3)
+
+local dragging, dragStart, startSize
+resizer.InputBegan:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then
+        dragging = true; dragStart = input.Position; startSize = main.AbsoluteSize
+    end
+end)
+UIS.InputChanged:Connect(function(input)
+    if dragging and (input.UserInputType == Enum.UserInputType.MouseMovement or input.UserInputType == Enum.UserInputType.Touch) then
+        local d = input.Position - dragStart
+        main.Size = UDim2.new(0, math.max(360, startSize.X + d.X), 0, math.max(280, startSize.Y + d.Y))
+    end
+end)
+UIS.InputEnded:Connect(function(input)
+    if input.UserInputType == Enum.UserInputType.MouseButton1 or input.UserInputType == Enum.UserInputType.Touch then dragging = false end
+end)
+
+-- ============================================================
+--  РЕДАКТОР
+-- ============================================================
+local editor = Instance.new("Frame")
+editor.Size = UDim2.new(0, 780, 0, 560)
+editor.Position = UDim2.new(0.5, -390, 0.5, -280)
+editor.BackgroundColor3 = THEME.bg
+editor.BorderSizePixel = 0; editor.Active = true; editor.Draggable = true
+editor.Visible = false; editor.ZIndex = 10; editor.Parent = screen
+Instance.new("UICorner", editor).CornerRadius = UDim.new(0, 10)
+local estr = Instance.new("UIStroke", editor); estr.Color = THEME.accent; estr.Thickness = 2
+
+local _, eBack = makeHeader(editor, "📝 Редактор", function()
+    editor.Visible = false; main.Visible = true
+end)
+eBack.Text = "←"
+
+local toolbar = Instance.new("Frame")
+toolbar.Size = UDim2.new(1, -20, 0, 34); toolbar.Position = UDim2.new(0, 10, 0, 44)
+toolbar.BackgroundColor3 = THEME.panel; toolbar.BorderSizePixel = 0
+toolbar.Parent = editor
+Instance.new("UICorner", toolbar).CornerRadius = UDim.new(0, 6)
+local tLay = Instance.new("UIListLayout", toolbar)
+tLay.FillDirection = Enum.FillDirection.Horizontal
+tLay.Padding = UDim.new(0, 6); tLay.VerticalAlignment = Enum.VerticalAlignment.Center
+local tPad = Instance.new("UIPadding", toolbar); tPad.PaddingLeft = UDim.new(0, 6)
+
+local function makeToolBtn(text, color, onClick)
+    local b = Instance.new("TextButton")
+    b.Size = UDim2.new(0, 0, 1, -8); b.AutomaticSize = Enum.AutomaticSize.X
+    b.BackgroundColor3 = color or THEME.panelAlt
+    b.Text = "  " .. text .. "  "; b.TextColor3 = THEME.text
+    b.Font = Enum.Font.GothamBold; b.TextSize = 12; b.BorderSizePixel = 0
+    b.Parent = toolbar
+    Instance.new("UICorner", b).CornerRadius = UDim.new(0, 5)
+    b.MouseButton1Click:Connect(onClick)
+    return b
+end
+
+local searchBox = Instance.new("TextBox")
+searchBox.Size = UDim2.new(0, 260, 0, 30); searchBox.Position = UDim2.new(1, -270, 0, 46)
+searchBox.BackgroundColor3 = THEME.panelAlt; searchBox.BorderSizePixel = 0
+searchBox.PlaceholderText = "🔎 Поиск..."; searchBox.PlaceholderColor3 = THEME.textDim
+searchBox.Text = ""; searchBox.TextColor3 = THEME.text
+searchBox.Font = Enum.Font.Code; searchBox.TextSize = 12
+searchBox.TextXAlignment = Enum.TextXAlignment.Left
+searchBox.ClearTextOnFocus = false; searchBox.Parent = editor
+Instance.new("UICorner", searchBox).CornerRadius = UDim.new(0, 6)
+local sp = Instance.new("UIPadding", searchBox); sp.PaddingLeft = UDim.new(0, 8); sp.PaddingRight = UDim.new(0, 8)
+
+local codeFrame = Instance.new("Frame")
+codeFrame.Size = UDim2.new(1, -20, 1, -150); codeFrame.Position = UDim2.new(0, 10, 0, 86)
+codeFrame.BackgroundColor3 = Color3.fromRGB(16, 16, 20); codeFrame.BorderSizePixel = 0
+codeFrame.Parent = editor
+Instance.new("UICorner", codeFrame).CornerRadius = UDim.new(0, 6)
+local cstr = Instance.new("UIStroke", codeFrame); cstr.Color = THEME.border; cstr.Thickness = 1
+
+local scroll = Instance.new("ScrollingFrame")
+scroll.Size = UDim2.new(1, -8, 1, -8); scroll.Position = UDim2.new(0, 4, 0, 4)
+scroll.BackgroundTransparency = 1; scroll.BorderSizePixel = 0
+scroll.ScrollBarThickness = 6; scroll.CanvasSize = UDim2.new(0, 0, 0, 0)
+scroll.AutomaticCanvasSize = Enum.AutomaticSize.Y
+scroll.Parent = codeFrame
+
+local codeLay = Instance.new("UIListLayout", scroll)
+codeLay.Padding = UDim.new(0, 1); codeLay.SortOrder = Enum.SortOrder.LayoutOrder
+local cPad = Instance.new("UIPadding", scroll); cPad.PaddingTop = UDim.new(0, 6); cPad.PaddingLeft = UDim.new(0, 6)
+
+local lines = {}
+local currentTarget = nil
+local rowIndex = 0  -- для порядка
+
+local function buildLines(root)
+    local out = {}
+    local function walk(tbl, prefix, depth)
+        if depth > 4 then return end
+        if type(tbl) ~= "table" then return end
+        for k, v in pairs(tbl) do
+            local key = (type(k) == "string" and k:match("^[%a_][%w_]*$")) and k or ("[" .. tostring(k) .. "]")
+            local full = (prefix == "" and key) or (prefix .. "." .. key)
+            local vt = typeof(v)
+            if vt == "table" then
+                table.insert(out, {key = full, raw = "{...}", isTable = true})
+                walk(v, full, depth + 1)
+            else
+                table.insert(out, {key = full, raw = pretty(v), isTable = false})
+            end
+        end
+    end
+    walk(root, "", 0)
+    return out
+end
+
+local function rebuildCodeView()
+    for _, c in ipairs(scroll:GetChildren()) do
+        if c:IsA("Frame") then c:Destroy() end
+    end
+    rowIndex = 0
+
+    local q = searchBox.Text:lower()
+
+    for idx, entry in ipairs(lines) do
+        local full = entry.key .. " = " .. entry.raw
+        local visible = (q == "" or full:lower():find(q, 1, true))
+        if visible then
+            rowIndex = rowIndex + 1
+
+            local row = Instance.new("Frame")
+            row.Size = UDim2.new(1, 0, 0, 22)
+            row.BackgroundTransparency = 1
+            row.Parent = scroll
+
+            local num = Instance.new("TextLabel")
+            num.Size = UDim2.new(0, 40, 1, 0); num.Position = UDim2.new(0, 0, 0, 0)
+            num.BackgroundTransparency = 1; num.Text = tostring(idx)
+            num.TextColor3 = THEME.textDim; num.TextXAlignment = Enum.TextXAlignment.Right
+            num.Font = Enum.Font.Code; num.TextSize = 12; num.Parent = row
+
+            if entry.isTable then
+                -- таблица — только для чтения
+                local lbl = Instance.new("TextLabel")
+                lbl.Size = UDim2.new(1, -50, 1, 0); lbl.Position = UDim2.new(0, 48, 0, 0)
+                lbl.BackgroundTransparency = 1; lbl.RichText = true
+                lbl.Text = highlightLuaFixed(full)
+                lbl.TextColor3 = THEME.text
+                lbl.TextXAlignment = Enum.TextXAlignment.Left
+                lbl.Font = Enum.Font.Code; lbl.TextSize = 13
+                lbl.Parent = row
+            else
+                -- редактируемое поле
+                local box = Instance.new("TextBox")
+                box.Size = UDim2.new(1, -50, 1, 0); box.Position = UDim2.new(0, 48, 0, 0)
+                box.BackgroundColor3 = THEME.panelAlt
+                box.BackgroundTransparency = 0.7
+                box.BorderSizePixel = 0
+                box.Text = full
+                box.RichText = true
+                box.TextColor3 = THEME.text
+                box.Font = Enum.Font.Code
+                box.TextSize = 13
+                box.TextXAlignment = Enum.TextXAlignment.Left
+                box.ClearTextOnFocus = false
+                box.TextEditable = true
+                box.Parent = row
+                Instance.new("UICorner", box).CornerRadius = UDim.new(0, 3)
+                local bp = Instance.new("UIPadding", box)
+                bp.PaddingLeft = UDim.new(0, 4); bp.PaddingRight = UDim.new(0, 4)
+
+                -- подсветка
+                box.RichText = true
+                box.Text = highlightLuaFixed(full)
+
+                box.Focused:Connect(function()
+                    box.RichText = false
+                    box.Text = full
+                    box.BackgroundTransparency = 0.3
+                end)
+
+                box.FocusLost:Connect(function(enter)
+                    box.BackgroundTransparency = 0.7
+                    local newText = box.Text
+                    if newText ~= full then
+                        local k, v = newText:match("^(.-)%s*=%s*(.+)$")
+                        if k and v then
+                            k = k:gsub("%s+$", ""); v = v:gsub("^%s+", ""):gsub("%s+$", "")
+                            local value, perr = parseValue(v)
+                            if value == nil and perr then
+                                box.TextColor3 = THEME.bad
+                                task.delay(0.6, function() box.TextColor3 = THEME.text end)
+                                log("❌ " .. perr, THEME.bad)
+                            else
+                                local ok, err = setByPath(currentTarget, k, value)
+                                if ok then
+                                    entry.raw = v; entry.key = k
+                                    full = k .. " = " .. v
+                                    box.TextColor3 = THEME.good
+                                    task.delay(0.6, function() box.TextColor3 = THEME.text end)
+                                    log("✅ " .. k .. " = " .. v, THEME.good)
+                                else
+                                    box.TextColor3 = THEME.bad
+                                    task.delay(0.6, function() box.TextColor3 = THEME.text end)
+                                    log("❌ " .. tostring(err), THEME.bad)
+                                end
+                            end
+                        end
+                    end
+                    -- возвращаем подсветку
+                    box.RichText = true
+                    box.Text = highlightLuaFixed(full)
+                end)
+            end
+        end
+    end
+end
+
+searchBox:GetPropertyChangedSignal("Text"):Connect(rebuildCodeView)
+
+-- ============================================================
+--  ОТКРЫТИЕ РЕДАКТОРА
+-- ============================================================
+viewBtn.MouseButton1Click:Connect(function()
+    local path = pathBox.Text
+    if path == "" then log("❌ Введи путь", THEME.bad); return end
+    log("⏳ Ищу: " .. path, THEME.accent)
+    local target, err = resolvePath(path)
+    if not target then log("❌ " .. tostring(err), THEME.bad); return end
+
+    if typeof(target) == "Instance" and target:IsA("ModuleScript") then
+        local ok, mod = pcall(require, target)
+        if not ok then log("❌ require: " .. tostring(mod), THEME.bad); return end
+        target = mod
+    end
+
+    currentTarget = target
+    lines = buildLines(target)
+    rebuildCodeView()
+
+    main.Visible = false
+    editor.Visible = true
+    log("✅ Открыто: " .. #lines .. " строк", THEME.good)
+end)
+
+-- ============================================================
+--  КНОПКИ ТУЛБАРА
+-- ============================================================
+makeToolBtn("📋 Copy", THEME.panelAlt, function()
+    local txt = {}
+    for _, l in ipairs(lines) do table.insert(txt, l.key .. " = " .. l.raw) end
+    local full = table.concat(txt, "\n")
+    if setclipboard then setclipboard(full); log("📋 Скопировано", THEME.good)
+    else log("❌ Нет setclipboard", THEME.bad) end
+end)
+
+makeToolBtn("💾 Save", Color3.fromRGB(55, 90, 70), function()
+    if not currentTarget then log("❌ Нет цели", THEME.bad); return end
+    local okCount, failCount = 0, 0
+    for _, l in ipairs(lines) do
+        if not l.isTable then
+            local value, perr = parseValue(l.raw)
+            if value == nil and perr then
+                failCount = failCount + 1
+                log("❌ " .. l.key .. ": " .. perr, THEME.bad)
+            else
+                local ok, err = setByPath(currentTarget, l.key, value)
+                if ok then okCount = okCount + 1
+                else
+                    failCount = failCount + 1
+                    log("❌ " .. l.key .. ": " .. tostring(err), THEME.bad)
+                end
+            end
+        end
+    end
+    log(string.format("💾 Сохранено: %d ок, %d ошибок", okCount, failCount),
+        failCount == 0 and THEME.good or THEME.warn)
+end)
+
+makeToolBtn("🗑 Clear", Color3.fromRGB(90, 55, 55), function()
+    lines = {}
+    rebuildCodeView()
+    log("🗑 Очищено", THEME.warn)
+end)
+
+-- ============================================================
+--  G — открыть/закрыть
+-- ============================================================
+UIS.InputBegan:Connect(function(input, gpe)
+    if gpe then return end
+    if input.KeyCode == Enum.KeyCode.G then
+        if editor.Visible then
+            editor.Visible = false; main.Visible = true
+        elseif main.Visible then
+            main.Visible = false
+        else
+            main.Visible = true
+        end
+    end
+end)
+
+log("Готово. G — открыть/закрыть.", THEME.good)
+log("Путь → 🔍 Просмотреть → кликни строку → меняй", THEME.textDim)
